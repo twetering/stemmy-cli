@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual env
+.venv/
+venv/
+ENV/
+
+# Environment
+.env
+.env.local
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project data (do not commit database or output)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+output/
+*.mp3
+*.wav
+# Exception: bundled background music for compilations
+!src/stemmy_cli/static/music/*.mp3
+
+# Keep data dir structure
+!data/.gitkeep
+!output/.gitkeep
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db

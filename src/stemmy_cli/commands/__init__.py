@@ -1,0 +1,41 @@
+"""Stemmy CLI command modules."""
+
+from stemmy_cli.commands import (
+    audio,
+    characters,
+    chat,
+    compilations,
+    embeddings,
+    entities,
+    formats,
+    fragments,
+    items,
+    knowledge,
+    search,
+    sounds,
+    stemmies,
+    tasks,
+    transcripts,
+    voices,
+    youtube,
+)
+
+__all__ = [
+    "audio",
+    "characters",
+    "chat",
+    "compilations",
+    "embeddings",
+    "entities",
+    "formats",
+    "fragments",
+    "items",
+    "knowledge",
+    "search",
+    "sounds",
+    "stemmies",
+    "tasks",
+    "transcripts",
+    "voices",
+    "youtube",
+]
