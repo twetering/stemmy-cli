@@ -16,7 +16,7 @@ Professional command-line interface for the Stemmy audio content platform. Creat
 ### From source
 
 ```bash
-git clone https://github.com/stemmy/stemmy-cli.git
+git clone https://github.com/twetering/stemmy-cli.git
 cd stemmy-cli
 pip install -e .
 # or: pip install -r requirements.txt && PYTHONPATH=src stemmy --help
@@ -90,6 +90,13 @@ stemmy_cli/
 ├── output/             # Generated MP3s (gitignored)
 ├── docs/               # Schema, database docs
 └── static/music/       # Bundled background music (in package)
+```
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest tests/ -v
 ```
 
 ## License
