@@ -9,6 +9,46 @@ from stemmy_cli.output import print_error, print_info, print_success
 app = typer.Typer(help="Database maintenance (migrate words, sync to Turso)")
 
 
+@app.command("info")
+def db_info():
+    """Show database connection and basic stats."""
+    from stemmy_cli.adapters.connection import get_connection
+    from stemmy_cli.config import get_database_path
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    try:
+        conn = get_connection(prefer_turso=True)
+        db_path = get_database_path()
+
+        from stemmy_cli.paths import get_project_root
+        table = Table(title="Database")
+        table.add_column("Property", style="dim")
+        table.add_column("Value", style="cyan")
+        table.add_row("Connection", "Turso" if conn.is_turso else "SQLite")
+        path_val = str(get_project_root() / "data" / "stemmy-replica.db") if conn.is_turso else str(db_path)
+        table.add_row("Path", path_val)
+
+        # Quick stats
+        for name, sql in [
+            ("formats", "SELECT COUNT(*) FROM formats"),
+            ("items", "SELECT COUNT(*) FROM items"),
+            ("fragments", "SELECT COUNT(*) FROM fragments"),
+            ("entities", "SELECT COUNT(*) FROM entities"),
+        ]:
+            try:
+                row = conn.fetchone(sql)
+                table.add_row(name, str(row[0] if row else 0))
+            except Exception:
+                table.add_row(name, "—")
+
+        console.print(table)
+    except Exception as e:
+        print_error(str(e))
+        raise typer.Exit(1)
+
+
 @app.command("migrate-words")
 def migrate_words_cmd(
     execute: bool = typer.Option(False, "--execute", "-e", help="Apply changes (default: dry run)"),

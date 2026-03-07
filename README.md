@@ -42,7 +42,8 @@ stemmy db info
 stemmy formats list
 
 # Create a compilation
-stemmy compilations create --format <format-id> --query "AI discussions"
+stemmy compilations quick --query "AI discussions"
+# Or: stemmy compilations run --format <format-id> --query "..."
 ```
 
 ## Configuration

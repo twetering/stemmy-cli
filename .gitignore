@@ -38,6 +38,7 @@ ENV/
 
 # Project data (do not commit database or output)
 data/*.db
+data/*.db-*
 data/*.db-wal
 data/*.db-shm
 output/

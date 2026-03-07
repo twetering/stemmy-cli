@@ -53,8 +53,8 @@ dev = [
 stemmy = "stemmy_cli.main:main"
 
 [project.urls]
-Homepage = "https://github.com/stemmy/stemmy-cli"
-Documentation = "https://stemmy.nl/docs/cli"
+Homepage = "https://github.com/twetering/stemmy-cli"
+Documentation = "https://github.com/twetering/stemmy-cli#readme"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/stemmy_cli"]
