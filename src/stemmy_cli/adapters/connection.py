@@ -19,12 +19,16 @@ from typing import Any, Optional
 from stemmy_cli.config import get_database_path
 
 
-# Try to import libsql for Turso support
+# Try to import libsql for Turso support (prefer official libsql over libsql-experimental)
 try:
-    import libsql_experimental as libsql
+    import libsql
     LIBSQL_AVAILABLE = True
 except ImportError:
-    LIBSQL_AVAILABLE = False
+    try:
+        import libsql_experimental as libsql
+        LIBSQL_AVAILABLE = True
+    except ImportError:
+        LIBSQL_AVAILABLE = False
 
 
 class DatabaseConnection:
@@ -97,9 +101,10 @@ def get_turso_connection() -> Optional[DatabaseConnection]:
     if not LIBSQL_AVAILABLE:
         return None
     
-    turso_url = os.environ.get("TURSO_DB_URL")
-    turso_token = os.environ.get("TURSO_API_KEY")
-    
+    # Support both stemmy_cli and Turso docs env var names
+    turso_url = os.environ.get("TURSO_DB_URL") or os.environ.get("TURSO_DATABASE_URL")
+    turso_token = os.environ.get("TURSO_API_KEY") or os.environ.get("TURSO_AUTH_TOKEN")
+
     if not turso_url or not turso_token:
         return None
     
@@ -154,6 +159,10 @@ def get_connection(prefer_turso: bool = True) -> DatabaseConnection:
     Returns:
         DatabaseConnection wrapper
     """
+    # Load .env before checking Turso (config loads from cwd, project root, ~/.stemmy)
+    from stemmy_cli.config import get_config
+    get_config()
+
     if prefer_turso:
         turso_conn = get_turso_connection()
         if turso_conn:
@@ -174,11 +183,11 @@ def sync_to_turso(replace: bool = False):
     # Ensure .env is loaded
     get_database_path()
 
-    turso_url = os.environ.get("TURSO_DB_URL")
-    turso_token = os.environ.get("TURSO_API_KEY")
+    turso_url = os.environ.get("TURSO_DB_URL") or os.environ.get("TURSO_DATABASE_URL")
+    turso_token = os.environ.get("TURSO_API_KEY") or os.environ.get("TURSO_AUTH_TOKEN")
 
     if not turso_url or not turso_token:
-        raise RuntimeError("TURSO_DB_URL and TURSO_API_KEY must be set")
+        raise RuntimeError("Set TURSO_DB_URL (or TURSO_DATABASE_URL) and TURSO_API_KEY (or TURSO_AUTH_TOKEN)")
 
     local_db = get_database_path()
     if not local_db.exists():
@@ -230,7 +239,7 @@ def sync_to_turso(replace: bool = False):
     # 3. Fallback: libsql replica sync
     print("  Using libsql replica sync...", flush=True)
     if not LIBSQL_AVAILABLE:
-        raise RuntimeError("libsql-experimental not installed. Or install Turso CLI: brew install tursodatabase/tap/turso")
+        raise RuntimeError("libsql not installed. pip install libsql. Or use Turso CLI: brew install tursodatabase/tap/turso")
 
     replica_path = str(local_db.parent / "stemmy-turso-sync.db")
     if Path(replica_path).exists():
