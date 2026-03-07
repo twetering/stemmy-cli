@@ -1,6 +1,8 @@
 """Workflow commands that combine multiple operations."""
 
 import json
+import os
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -197,9 +199,55 @@ def rss_to_compilation(
                 print_error(f"Transcription error for {item['title']}: {e}")
         
         results["steps_completed"].append("transcribe")
-        
+
+        # Step 3b: Build embeddings for new fragments (enables semantic search)
+        try:
+            needs_embedding = adapter.execute_raw(
+                """
+                SELECT COUNT(*) as n FROM fragments f
+                LEFT JOIN fragment_embeddings e ON f.id = e.fragment_id
+                WHERE f.item_id IN (
+                    SELECT id FROM items WHERE format_id = ?
+                ) AND f.text IS NOT NULL AND f.text != '' AND e.fragment_id IS NULL
+                """,
+                [format_id],
+            )
+            count = (needs_embedding[0]["n"] or 0) if needs_embedding else 0
+            if count > 0:
+                print_info(f"Step 3b: Building embeddings for {count} new fragments...")
+                from stemmy_cli.embeddings.service import FragmentEmbedder
+                from stemmy_cli.config import get_database_path
+                import sqlite3
+
+                db_path = get_database_path()
+                provider = "openai" if os.environ.get("OPENAI_API_KEY") else "local"
+                embedder = FragmentEmbedder(provider=provider, db_path=str(db_path))
+                conn = sqlite3.connect(str(db_path))
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    """
+                    SELECT f.id, f.text FROM fragments f
+                    LEFT JOIN fragment_embeddings e ON f.id = e.fragment_id
+                    WHERE f.item_id IN (SELECT id FROM items WHERE format_id = ?)
+                    AND f.text IS NOT NULL AND f.text != '' AND e.fragment_id IS NULL
+                    """,
+                    [format_id],
+                )
+                fragments = [{"id": row[0], "text": row[1]} for row in cursor.fetchall()]
+                conn.close()
+                if fragments:
+                    results_emb = embedder.embed_fragments(fragments, batch_size=32)
+                    embedder.save_embeddings_to_db(results_emb)
+                    print_success(f"Embedded {len(results_emb)} fragments")
+                    results["steps_completed"].append("build_embeddings")
+        except Exception as e:
+            print_warning(f"Embeddings build skipped: {e}")
+
         print_info("Step 4: Searching for fragments...")
         all_fragments = []
+        
+        # Search more broadly: fragment_limit * 3 per item, then cap total
+        per_item_limit = max(fragment_limit * 3, 20)
         
         for item in items_to_process:
             conditions = ["item_id = ?"]
@@ -211,7 +259,7 @@ def rss_to_compilation(
                 params.append(f"{q}%" if search_mode == "starts_with" else f"%{q}%")
             
             where_clause = " AND ".join(conditions)
-            params.append(fragment_limit * 2)
+            params.append(per_item_limit)
             
             fragments = adapter.execute_raw(
                 f'''
@@ -261,94 +309,92 @@ def rss_to_compilation(
         print_success(f"Found {len(all_fragments)} fragments")
         results["steps_completed"].append("search_fragments")
         
-        print_info("Step 5: Generating compilation...")
-        
-        fragments_payload = []
-        
-        final_intro = intro_text or f"Welkom bij deze compilatie van {feed_info['title']}"
-        fragments_payload.append({
-            "id": str(uuid.uuid4()),
-            "type": "sentence",
-            "text": final_intro,
-            "voiceId": voice_id,
-            "provider": "elevenlabs",
-            "ttsProvider": "elevenlabs",
-            "isGenerated": False,
-        })
-        
+        print_info("Step 5: Extracting audio segments (standalone ffmpeg)...")
+        segments_payload = []
         for f in all_fragments:
-            fragments_payload.append({
+            start = f.get("start_time")
+            end = f.get("end_time")
+            if start is not None and end is not None:
+                start_f = float(start) if not isinstance(start, (int, float)) else start
+                end_f = float(end) if not isinstance(end, (int, float)) else end
+            else:
+                continue
+            segments_payload.append({
                 "id": f.get("id", str(uuid.uuid4())),
-                "type": "transcript",
-                "text": f["text"],
-                "start_time": f.get("start_time"),
-                "end_time": f.get("end_time"),
+                "start_time": start_f,
+                "end_time": end_f,
                 "audio_url": f.get("audio_url", ""),
-                "item_id": f.get("item_id"),
             })
         
-        voicesettings = json.dumps({
-            "stability": 0.3,
-            "similarity_boost": 0.98,
-            "style": 0.5,
-            "use_speaker_boost": True,
-        })
+        if not segments_payload:
+            print_warning("No valid segments to extract (missing start/end times)")
+            output_result(results, json_output=json_output, title="Workflow results")
+            return
         
-        tts_payload = {
-            "fragments": fragments_payload,
-            "showformat": "compilation",
-            "title": f"Compilatie: {feed_info['title']}",
-            "voicesettings": voicesettings,
-            "intro": {},
-            "outro": {},
-            "bgaudio": {},
-        }
-        
+        from stemmy_cli.audio.parallel_extractor import ParallelExtractor
+        from stemmy_cli.tts import generate_tts, is_tts_configured
+        import tempfile
+        from pydub import AudioSegment
+
+        if not is_tts_configured():
+            print_error("ELEVENLABS_API_KEY not set. Add to .env for standalone TTS. See .env.example.")
+            results["compilation"] = {"error": "ELEVENLABS_API_KEY required for TTS"}
+            output_result(results, json_output=json_output, title="Workflow results")
+            return
+
+        print_info("Step 6: Extracting + compiling (standalone)...")
+        final_intro = intro_text or f"Welkom bij deze compilatie van {feed_info['title']}"
+
         try:
-            headers = {"Idempotency-Key": str(uuid.uuid4())}
-            result = http.start_and_wait(
-                "/api/generate-multiple-voices",
-                tts_payload,
-                "/api/audio-status/{task_id}",
-                poll_interval=3.0,
-                max_wait=600.0,
-                verbose=True,
-                headers=headers,
-            )
-            
-            inner_result = result.get("result", {})
-            if isinstance(inner_result, str):
-                inner_result = json.loads(inner_result)
-            
-            audio_url = (
-                inner_result.get("audio_file") or 
-                result.get("audio_file") or
-                inner_result.get("url") or
-                result.get("url")
-            )
-            
-            if audio_url and output_dir:
-                output_path = Path(output_dir)
-                output_path.mkdir(parents=True, exist_ok=True)
-                
-                safe_title = feed_info["title"].replace(" ", "_").replace("/", "-")[:30]
-                output_file = output_path / f"compilation_{safe_title}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3"
-                
-                import httpx
-                response = httpx.get(audio_url, follow_redirects=True, timeout=120.0)
-                if response.status_code == 200:
-                    with open(output_file, "wb") as f:
-                        f.write(response.content)
-                    print_success(f"Audio saved to: {output_file}")
-                    results["compilation"] = {"audio_file": str(output_file), "s3_url": audio_url}
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp = Path(tmpdir)
+                # Extract (standalone ffmpeg, files stay in tmp until concat)
+                extractor = ParallelExtractor(max_workers=4, output_dir=tmp)
+                successes, failures = extractor.extract_segments(segments_payload)
+                if not successes:
+                    err_msgs = [f"{r.segment_id}: {r.error}" for r in failures[:3]]
+                    print_error("Extraction failed: " + "; ".join(err_msgs))
+                    results["compilation"] = {"error": "Extraction failed"}
+                    output_result(results, json_output=json_output, title="Workflow results")
+                    return
+                if failures:
+                    print_warning(f"Extracted {len(successes)}/{len(segments_payload)} segments ({len(failures)} failed)")
                 else:
-                    results["compilation"] = {"s3_url": audio_url}
-            else:
-                results["compilation"] = {"s3_url": audio_url}
-            
-            print_success(f"Compilation generated: {audio_url}")
-            results["steps_completed"].append("generate_compilation")
-            
+                    print_success(f"Extraction complete: {len(successes)} segments")
+
+                extracted_paths = {r.segment_id: r.output_path for r in successes}
+
+                # TTS intro
+                intro_path = tmp / "intro.mp3"
+                generate_tts(final_intro, voice_id, output_path=intro_path)
+                segments_to_concat = [intro_path]
+
+                # Add extracted segment paths in order
+                for f in all_fragments:
+                    frag_id = f.get("id")
+                    path = extracted_paths.get(str(frag_id)) or extracted_paths.get(frag_id)
+                    if path and Path(path).exists():
+                        segments_to_concat.append(Path(path))
+
+                # Concatenate
+                combined = AudioSegment.empty()
+                for p in segments_to_concat:
+                    combined += AudioSegment.from_mp3(str(p))
+
+                # Save
+                if output_dir:
+                    out_dir = Path(output_dir)
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    safe_title = feed_info["title"].replace(" ", "_").replace("/", "-")[:30]
+                    output_file = out_dir / f"compilation_{safe_title}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3"
+                else:
+                    output_file = tmp / "compilation.mp3"
+
+                combined.export(str(output_file), format="mp3", bitrate="128k")
+                print_success(f"Compilation saved: {output_file}")
+                results["compilation"] = {"audio_file": str(output_file)}
+                results["steps_completed"].append("generate_compilation")
+
         except Exception as e:
             print_error(f"Compilation generation error: {e}")
             results["compilation"] = {"error": str(e)}

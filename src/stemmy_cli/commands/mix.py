@@ -30,6 +30,31 @@ console = Console()
 API_BASE = "http://localhost:5001"
 
 
+def _generate_tts_standalone(text: str, voice_id: str) -> Optional[bytes]:
+    """Generate TTS via ElevenLabs (standalone, no surrounded)."""
+    try:
+        from stemmy_cli.tts import generate_tts
+        return generate_tts(text, voice_id=voice_id)
+    except Exception as e:
+        console.print(f"[dim]TTS error: {e}[/dim]")
+        return None
+
+
+def _generate_tts_api(text: str, voice: str) -> Optional[str]:
+    """Generate TTS via surrounded API, returns audio URL."""
+    try:
+        with httpx.Client(timeout=60.0) as client:
+            resp = client.post(
+                f"{API_BASE}/api/tts",
+                json={"text": text, "voice": voice},
+            )
+            resp.raise_for_status()
+            return resp.json().get("audio_url")
+    except Exception as e:
+        console.print(f"[dim]TTS API error: {e}[/dim]")
+        return None
+
+
 def _download_file(url: str, local_path: Path) -> bool:
     """Download a file from URL."""
     try:
@@ -44,18 +69,22 @@ def _download_file(url: str, local_path: Path) -> bool:
 
 
 def _generate_tts(text: str, voice: str = "alloy") -> Optional[str]:
-    """Generate TTS and return audio URL."""
-    try:
-        with httpx.Client(timeout=60.0) as client:
-            resp = client.post(
-                f"{API_BASE}/api/tts",
-                json={"text": text, "voice": voice},
-            )
-            resp.raise_for_status()
-            return resp.json().get("audio_url")
-    except Exception as e:
-        console.print(f"[dim]TTS error: {e}[/dim]")
+    """
+    Generate TTS. Uses standalone ElevenLabs when ELEVENLABS_API_KEY is set,
+    otherwise falls back to surrounded API. Returns local path or URL.
+    """
+    from stemmy_cli.tts import is_tts_configured
+
+    if is_tts_configured():
+        audio_bytes = _generate_tts_standalone(text, voice_id=voice)
+        if audio_bytes:
+            import tempfile
+            f = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+            f.write(audio_bytes)
+            f.close()
+            return f.name
         return None
+    return _generate_tts_api(text, voice=voice)
 
 
 def _normalize_audio(input_path: str, output_path: str, target_db: float = -16.0) -> bool:
@@ -172,10 +201,14 @@ def create_mix(
     if tts:
         console.print(f"[dim]Generating {len(tts)} TTS segments...[/dim]")
         for i, text in enumerate(tts):
-            url = _generate_tts(text, voice=voice)
-            if url:
+            url_or_path = _generate_tts(text, voice=voice)
+            if url_or_path:
                 local_path = temp_dir / f"tts_{i:03d}.mp3"
-                if _download_file(url, local_path):
+                if Path(url_or_path).exists():
+                    import shutil
+                    shutil.copy(url_or_path, local_path)
+                    audio_files.append(("tts", str(local_path), i))
+                elif _download_file(url_or_path, local_path):
                     audio_files.append(("tts", str(local_path), i))
     
     # Download fragments
@@ -237,15 +270,21 @@ def generate_tts_command(
     console.print(f"[dim]Text: {text[:50]}{'...' if len(text) > 50 else ''}[/dim]")
     
     with status_spinner(f"Using voice: {voice}", "TTS generated"):
-        url = _generate_tts(text, voice=voice)
+        url_or_path = _generate_tts(text, voice=voice)
     
-    if url:
-        with status_spinner("Downloading audio...", "Downloaded"):
-            if _download_file(url, Path(output)):
-                print_success(f"Created: {output}")
-                print_audio_preview(output)
-            else:
-                print_error("Failed to download audio")
+    if url_or_path:
+        if Path(url_or_path).exists():
+            import shutil
+            shutil.copy(url_or_path, output)
+            print_success(f"Created: {output}")
+            print_audio_preview(output)
+        else:
+            with status_spinner("Downloading audio...", "Downloaded"):
+                if _download_file(url_or_path, Path(output)):
+                    print_success(f"Created: {output}")
+                    print_audio_preview(output)
+                else:
+                    print_error("Failed to download audio")
     else:
         print_error("TTS generation failed")
 
@@ -333,19 +372,26 @@ def add_music(
 @app.command("voices")
 def list_voices():
     """List available TTS voices."""
-    voices = [
-        ("alloy", "Neutral, balanced voice"),
-        ("echo", "Warm, conversational male"),
-        ("fable", "Expressive, British accent"),
-        ("onyx", "Deep, authoritative male"),
-        ("nova", "Friendly, energetic female"),
-        ("shimmer", "Soft, gentle female"),
-    ]
-    
-    console.print()
-    console.print("[bold]Available TTS Voices[/bold]")
-    console.print()
-    for name, desc in voices:
-        console.print(f"  [cyan]{name:10}[/cyan] {desc}")
-    console.print()
-    console.print("[dim]Use: stemmy mix tts \"text\" --voice <name>[/dim]")
+    from stemmy_cli.tts import is_tts_configured
+
+    if is_tts_configured():
+        console.print()
+        console.print("[bold]Standalone TTS (ElevenLabs)[/bold]")
+        console.print()
+        console.print("  Use ElevenLabs voice_id. List available voices:")
+        console.print("  [cyan]  stemmy voices list[/cyan]")
+        console.print()
+        console.print("  Example: stemmy mix tts \"Hello\" --voice JBFqnCBsd6RMkjVDRZzb")
+    else:
+        voices = [
+            ("alloy", "Neutral (surrounded API)"),
+            ("echo", "Warm male (surrounded API)"),
+            ("nova", "Friendly female (surrounded API)"),
+        ]
+        console.print()
+        console.print("[bold]TTS Voices (surrounded API)[/bold]")
+        console.print()
+        for name, desc in voices:
+            console.print(f"  [cyan]{name:10}[/cyan] {desc}")
+        console.print()
+        console.print("[dim]For standalone: set ELEVENLABS_API_KEY, use voice_id[/dim]")

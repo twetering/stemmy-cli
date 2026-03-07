@@ -10,7 +10,7 @@ Professional command-line interface for the Stemmy audio content platform. Creat
 - **Semantic search** – Find fragments by meaning (requires embeddings)
 - **Turso support** – Sync local SQLite to Turso cloud for collaboration
 - **Interactive chat** – Natural language commands via `stemmy chat`
-- **Standalone mode** – RSS→compilation without surrounded Flask server (S3 + AssemblyAI direct)
+- **Standalone mode** – RSS→compilation without surrounded (S3, AssemblyAI, ElevenLabs, ffmpeg)
 
 ## Installation
 
@@ -28,7 +28,7 @@ pip install -e .
 - Python 3.10+
 - SQLite (or Turso for cloud sync)
 - Optional: OpenAI/Anthropic API keys for chat and embeddings
-- For standalone: ffmpeg (pydub), AWS credentials, AssemblyAI API key
+- For standalone: ffmpeg, AWS credentials, AssemblyAI key, ElevenLabs key
 
 ## Quick Start
 
@@ -53,7 +53,7 @@ stemmy compilations quick --query "AI discussions"
 Run the full pipeline without the surrounded Flask server:
 
 ```bash
-# Set in .env: AWS_*, S3_BUCKET_NAME, ASSEMBLY_API_KEY
+# Set in .env: AWS_*, S3_BUCKET_NAME, ASSEMBLY_API_KEY, ELEVENLABS_API_KEY
 
 # Full flow: RSS → import episodes → transcribe → search → compilation
 stemmy workflows rss-to-compilation "https://example.com/feed.xml" \

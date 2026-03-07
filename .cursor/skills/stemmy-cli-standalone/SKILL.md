@@ -19,6 +19,7 @@ Set in `.env`:
 | `AWS_REGION` | S3 region (default: eu-north-1) |
 | `S3_BUCKET_NAME` | S3 bucket (e.g. voxpop) |
 | `ASSEMBLY_API_KEY` | Direct transcription |
+| `ELEVENLABS_API_KEY` | Standalone TTS (workflows, mix) |
 | `STEMMY_DB_PATH` | SQLite database path |
 
 ## Full RSS-to-Compilation Flow
@@ -49,12 +50,13 @@ stemmy formats import-episodes <format_id> "https://example.com/feed.xml" -e 10 
 # 2. Transcribe pending items
 stemmy workflows transcribe-all <format_id> --wait -l 10
 
-# 3. Create compilation (requires surrounded for TTS)
-stemmy compilations extract-and-compile "Ik ben" -o ./ik_ben.mp3 --limit 10
+# 3. Create compilation (standalone TTS when ELEVENLABS_API_KEY set)
+stemmy workflows rss-to-compilation "..." -v <voice_id> -o ./output -s "Ik ben"
 ```
 
 ## Notes
 
-- **Compilation TTS** still uses surrounded `/api/generate-multiple-voices` when generating final audio. Import + transcribe are fully standalone.
+- **TTS** is standalone via ElevenLabs when `ELEVENLABS_API_KEY` is set.
+- **Extract** is standalone via ffmpeg (ParallelExtractor). No surrounded needed.
 - **Voice ID**: Run `stemmy voices list` to get a valid voice_id.
 - **Database**: Use existing stemmy.db or create fresh with `docs/schema.sql`.
