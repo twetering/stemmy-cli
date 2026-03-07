@@ -10,6 +10,7 @@ Professional command-line interface for the Stemmy audio content platform. Creat
 - **Semantic search** – Find fragments by meaning (requires embeddings)
 - **Turso support** – Sync local SQLite to Turso cloud for collaboration
 - **Interactive chat** – Natural language commands via `stemmy chat`
+- **Standalone mode** – RSS→compilation without surrounded Flask server (S3 + AssemblyAI direct)
 
 ## Installation
 
@@ -27,6 +28,7 @@ pip install -e .
 - Python 3.10+
 - SQLite (or Turso for cloud sync)
 - Optional: OpenAI/Anthropic API keys for chat and embeddings
+- For standalone: ffmpeg (pydub), AWS credentials, AssemblyAI API key
 
 ## Quick Start
 
@@ -46,6 +48,30 @@ stemmy compilations quick --query "AI discussions"
 # Or: stemmy compilations run --format <format-id> --query "..."
 ```
 
+## Standalone RSS-to-Compilation
+
+Run the full pipeline without the surrounded Flask server:
+
+```bash
+# Set in .env: AWS_*, S3_BUCKET_NAME, ASSEMBLY_API_KEY
+
+# Full flow: RSS → import episodes → transcribe → search → compilation
+stemmy workflows rss-to-compilation "https://example.com/feed.xml" \
+  -v <voice_id> \
+  -o ./output \
+  -s "Ik ben" \
+  --search-mode starts_with \
+  -e 10 \
+  -f 10
+```
+
+- `-s "Ik ben"` – search query (e.g. sentences starting with "Ik ben")
+- `--search-mode starts_with` – match prefix (or `contains`)
+- `-e 10` – number of episodes to import
+- `-f 10` – number of fragments per compilation
+
+List voices and pick one: `stemmy voices list`
+
 ## Configuration
 
 | Variable | Description |
@@ -55,6 +81,11 @@ stemmy compilations quick --query "AI discussions"
 | `TURSO_API_KEY` | Turso auth token (optional) |
 | `OPENAI_API_KEY` | For embeddings and chat (optional) |
 | `ANTHROPIC_API_KEY` | Alternative for chat (optional) |
+| `AWS_ACCESS_KEY_ID` | For standalone S3 upload (optional) |
+| `AWS_SECRET_ACCESS_KEY` | For standalone S3 upload (optional) |
+| `AWS_REGION` | S3 region (default: eu-north-1) |
+| `S3_BUCKET_NAME` | S3 bucket for audio (optional) |
+| `ASSEMBLY_API_KEY` | For standalone transcription (optional) |
 
 See [.env.example](.env.example) for all options.
 

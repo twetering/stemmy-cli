@@ -2,7 +2,6 @@
 
 import json
 import uuid
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -11,9 +10,11 @@ import typer
 
 from stemmy_cli.adapters.sqlite import SQLiteAdapter
 from stemmy_cli.adapters.http import HTTPAdapter
+from stemmy_cli.config import get_config
 from stemmy_cli.output import output_result, print_error, print_success, print_info, print_warning
 from stemmy_cli.commands.formats import _parse_rss_feed, _parse_rss_episodes
 from stemmy_cli.commands.transcripts import _import_transcript_to_db
+from stemmy_cli.transcribe import transcribe_item
 
 app = typer.Typer(help="Automated workflows combining multiple steps")
 
@@ -25,6 +26,7 @@ def rss_to_compilation(
     output_dir: Optional[str] = typer.Option(None, "--output", "-o", help="Output directory for audio files"),
     episodes: int = typer.Option(1, "--episodes", "-e", help="Number of episodes to process"),
     search_query: Optional[str] = typer.Option(None, "--search", "-s", help="Search query for fragments"),
+    search_mode: str = typer.Option("contains", "--search-mode", help="contains or starts_with (e.g. 'Ik ben')"),
     entity_type: Optional[str] = typer.Option(None, "--entity-type", help="Entity type to extract"),
     fragment_limit: int = typer.Option(5, "--fragments", "-f", help="Number of fragments per compilation"),
     wait_for_transcript: bool = typer.Option(True, "--wait/--no-wait", help="Wait for transcription to complete"),
@@ -92,32 +94,51 @@ def rss_to_compilation(
         results["format_id"] = format_id
         results["steps_completed"].append("create_format")
         
-        print_info(f"Step 2: Importing {episodes} episode(s)...")
+        print_info(f"Step 2: Importing {episodes} episode(s) (with audio normalization)...")
         episodes_list = _parse_rss_episodes(rss_url, limit=episodes)
+        api_base = get_config().api_base_url
+        subfolder = f"formats/{format_id}"
         
         items_to_process = []
         for ep in episodes_list:
-            if not ep.get("audio_url"):
+            source_url = ep.get("audio_url", "")
+            if not source_url:
                 print_warning(f"Skipping '{ep['title']}' - no audio URL")
                 continue
             
+            # Dedupe on source_url (original mp3)
             existing_item = adapter.execute_raw(
-                "SELECT id FROM items WHERE format_id = ? AND audio_url = ?",
-                [format_id, ep["audio_url"]]
+                "SELECT id, audio_url FROM items WHERE format_id = ? AND source_url = ?",
+                [format_id, source_url]
             )
             
             if existing_item:
                 item_id = existing_item[0]["id"]
+                audio_url = existing_item[0]["audio_url"]
                 print_info(f"Using existing item: {ep['title']}")
             else:
                 item_id = str(uuid.uuid4())
                 now = datetime.utcnow().isoformat()
+                print_info(f"Normalizing: {ep['title'][:50]}...")
+                try:
+                    from stemmy_cli.audio.normalize import process_audio_for_import
+                    audio_url = process_audio_for_import(
+                        source_url=source_url,
+                        item_id=item_id,
+                        subfolder=subfolder,
+                        upload_to_api=api_base,
+                    )
+                except Exception as e:
+                    print_warning(f"Normalization failed, using original: {e}")
+                    audio_url = source_url
+                
                 item_data = {
                     "id": item_id,
                     "format_id": format_id,
                     "title": ep["title"],
                     "description": ep.get("description", ""),
-                    "audio_url": ep["audio_url"],
+                    "audio_url": audio_url,
+                    "source_url": source_url,
                     "published_at": ep.get("published", now),
                     "duration_seconds": ep.get("duration", 0),
                     "transcript_status": "pending",
@@ -127,7 +148,7 @@ def rss_to_compilation(
                 adapter.insert("items", item_data)
                 print_success(f"Imported: {ep['title']}")
             
-            items_to_process.append({"id": item_id, "title": ep["title"], "audio_url": ep["audio_url"]})
+            items_to_process.append({"id": item_id, "title": ep["title"], "audio_url": audio_url})
             results["items_imported"].append({"id": item_id, "title": ep["title"]})
         
         results["steps_completed"].append("import_episodes")
@@ -142,54 +163,35 @@ def rss_to_compilation(
             
             print_info(f"Starting transcription for: {item['title']}")
             try:
-                payload = {
-                    "audio_url": item["audio_url"],
-                    "item_id": item["id"],
-                    "options": {
-                        "language_code": "nl",
-                        "speaker_labels": True,
-                        "entity_detection": True,
-                    }
-                }
-                result = http.post("/api/formats/transcribe", json=payload)
-                transcript_id = result.get("transcript_id")
-                
-                if wait_for_transcript and transcript_id:
-                    print_info(f"Waiting for transcription: {transcript_id}")
-                    max_wait = 1800
-                    poll_interval = 10
-                    waited = 0
-                    
-                    while waited < max_wait:
-                        status = http.get(f"/api/formats/transcription-status/{transcript_id}")
-                        status_val = status.get("status")
-                        
-                        if status_val == "completed":
-                            print_success(f"Transcription completed: {item['title']}")
-                            
-                            import_result = _import_transcript_to_db(
-                                adapter, item["id"], item["audio_url"], status
-                            )
-                            print_success(f"Imported {import_result['fragments_imported']} fragments and {import_result['entities_imported']} entities")
-                            adapter.update("items", item["id"], {"transcript_status": "completed"})
-                            results["transcripts_completed"].append({
-                                "item_id": item["id"],
-                                "transcript_id": transcript_id,
-                                "fragments": import_result["fragments_imported"],
-                                "entities": import_result["entities_imported"],
-                            })
-                            break
-                        elif status_val == "error":
-                            print_error(f"Transcription failed: {status.get('error')}")
-                            break
-                        else:
-                            time.sleep(poll_interval)
-                            waited += poll_interval
-                            if waited % 60 == 0:
-                                print_info(f"Still transcribing... ({waited}s elapsed)")
-                else:
+                transcript_id, status = transcribe_item(
+                    item["audio_url"],
+                    item["id"],
+                    item["title"],
+                    {"language_code": "nl", "speaker_labels": True, "entity_detection": True},
+                    wait=wait_for_transcript,
+                    http=http,
+                )
+                if wait_for_transcript and status:
+                    print_success(f"Transcription completed: {item['title']}")
+                    import_result = _import_transcript_to_db(
+                        adapter, item["id"], item["audio_url"], status
+                    )
+                    print_success(
+                        f"Imported {import_result['fragments_imported']} fragments "
+                        f"and {import_result['entities_imported']} entities"
+                    )
+                    adapter.update("items", item["id"], {"transcript_status": "completed"})
+                    results["transcripts_completed"].append({
+                        "item_id": item["id"],
+                        "transcript_id": transcript_id,
+                        "fragments": import_result["fragments_imported"],
+                        "entities": import_result["entities_imported"],
+                    })
+                elif transcript_id:
                     print_info(f"Transcription started: {transcript_id}")
                     results["transcripts_completed"].append({"item_id": item["id"], "transcript_id": transcript_id, "status": "started"})
+                elif wait_for_transcript:
+                    results["transcripts_completed"].append({"item_id": item["id"], "status": "error"})
                     
             except Exception as e:
                 print_error(f"Transcription error for {item['title']}: {e}")
@@ -205,7 +207,8 @@ def rss_to_compilation(
             
             if search_query:
                 conditions.append("LOWER(text) LIKE ?")
-                params.append(f"%{search_query.lower()}%")
+                q = search_query.lower()
+                params.append(f"{q}%" if search_mode == "starts_with" else f"%{q}%")
             
             where_clause = " AND ".join(conditions)
             params.append(fragment_limit * 2)
@@ -390,42 +393,29 @@ def transcribe_all(
             print_info(f"Transcribing: {item['title']}")
             
             try:
-                payload = {
-                    "audio_url": item["audio_url"],
-                    "item_id": item["id"],
-                    "options": {
-                        "language_code": "nl",
-                        "speaker_labels": True,
-                        "entity_detection": True,
-                    }
-                }
-                result = http.post("/api/formats/transcribe", json=payload)
-                transcript_id = result.get("transcript_id")
-                
-                if wait and transcript_id:
-                    max_wait = 1800
-                    poll_interval = 10
-                    waited = 0
-                    
-                    while waited < max_wait:
-                        status = http.get(f"/api/formats/transcription-status/{transcript_id}")
-                        if status.get("status") == "completed":
-                            import_result = _import_transcript_to_db(
-                                adapter, item["id"], item["audio_url"], status
-                            )
-                            adapter.update("items", item["id"], {"transcript_status": "completed"})
-                            print_success(f"Completed: {item['title']} ({import_result['fragments_imported']} fragments)")
-                            results.append({"item_id": item["id"], "status": "completed", **import_result})
-                            break
-                        elif status.get("status") == "error":
-                            print_error(f"Failed: {item['title']}")
-                            results.append({"item_id": item["id"], "status": "error"})
-                            break
-                        else:
-                            time.sleep(poll_interval)
-                            waited += poll_interval
-                else:
+                transcript_id, status = transcribe_item(
+                    item["audio_url"],
+                    item["id"],
+                    item["title"],
+                    {"language_code": "nl", "speaker_labels": True, "entity_detection": True},
+                    wait=wait,
+                    http=http,
+                )
+                if wait and status:
+                    import_result = _import_transcript_to_db(
+                        adapter, item["id"], item["audio_url"], status
+                    )
+                    adapter.update("items", item["id"], {"transcript_status": "completed"})
+                    print_success(
+                        f"Completed: {item['title']} "
+                        f"({import_result['fragments_imported']} fragments, "
+                        f"{import_result['entities_imported']} entities)"
+                    )
+                    results.append({"item_id": item["id"], "status": "completed", **import_result})
+                elif transcript_id:
                     results.append({"item_id": item["id"], "transcript_id": transcript_id, "status": "started"})
+                else:
+                    results.append({"item_id": item["id"], "status": "error"})
                     
             except Exception as e:
                 print_error(f"Error transcribing {item['title']}: {e}")

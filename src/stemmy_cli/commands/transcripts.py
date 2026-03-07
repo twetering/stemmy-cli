@@ -9,6 +9,7 @@ import typer
 
 from stemmy_cli.adapters.sqlite import SQLiteAdapter
 from stemmy_cli.adapters.http import HTTPAdapter
+from stemmy_cli.transcribe import transcribe_item
 from stemmy_cli.output import output_result, print_error, print_success, print_info, print_warning
 
 app = typer.Typer(help="Manage transcripts")
@@ -20,9 +21,11 @@ def _import_transcript_to_db(
     audio_url: str,
     transcript_data: Dict[str, Any],
 ) -> Dict[str, int]:
-    """Import transcript utterances and entities to SQLite database."""
-    utterances = transcript_data.get("utterances", [])
-    entities = transcript_data.get("entities", [])
+    """Import transcript utterances (fragments) and entities to SQLite database."""
+    # Surrounded returns nested transcript_data when completed
+    data = transcript_data.get("transcript_data", transcript_data)
+    utterances = data.get("utterances", [])
+    entities = data.get("entities", [])
     
     fragments_imported = 0
     entities_imported = 0
@@ -159,39 +162,43 @@ def create(
         
         print_info(f"Starting transcription for: {item.get('title', item_id)}")
         print_info(f"Audio URL: {audio_url}")
-        
-        http = HTTPAdapter(timeout=60.0)
 
-        payload = {
-            "audio_url": audio_url,
-            "item_id": item_id,
-            "options": {
-                "language_code": language,
-                "speaker_labels": speaker_labels,
-                "entity_detection": entity_detection,
-            }
+        http = HTTPAdapter(timeout=60.0)
+        options = {
+            "language_code": language,
+            "speaker_labels": speaker_labels,
+            "entity_detection": entity_detection,
         }
 
         if wait:
             print_info("Waiting for transcription (this may take several minutes)...")
-            result = http.start_and_wait(
-                "/api/formats/transcribe",
-                payload,
-                "/api/formats/transcription-status/{task_id}",
-                poll_interval=10.0,
-                max_wait=1800.0,
-                verbose=True,
-            )
-            
+
+        transcript_id, status = transcribe_item(
+            audio_url,
+            item_id,
+            item.get("title", item_id),
+            options,
+            wait=wait,
+            http=http,
+        )
+
+        if wait and status:
+            import_result = _import_transcript_to_db(adapter, item_id, audio_url, status)
             adapter.update("items", item_id, {"transcript_status": "completed"})
+            result = {
+                "transcript_id": transcript_id,
+                "status": "completed",
+                "fragments_imported": import_result["fragments_imported"],
+                "entities_imported": import_result["entities_imported"],
+            }
+            print_success(f"Imported {import_result['fragments_imported']} fragments and {import_result['entities_imported']} entities")
+        elif transcript_id:
+            adapter.update("items", item_id, {"transcript_status": "processing"})
+            result = {"transcript_id": transcript_id, "status": "started"}
+            print_success(f"Transcription started: {transcript_id}")
+            print_info(f"Check status with: stemmy transcripts status {transcript_id}")
         else:
-            result = http.post("/api/formats/transcribe", json=payload)
-            transcript_id = result.get("transcript_id") or result.get("id") or result.get("task_id")
-            if transcript_id:
-                print_success(f"Transcription started: {transcript_id}")
-                print_info(f"Check status with: stemmy transcripts status {transcript_id}")
-                
-                adapter.update("items", item_id, {"transcript_status": "processing"})
+            result = {"status": "error"}
 
         output_result(result, json_output=json_output, title="Transcription result")
 
@@ -207,8 +214,13 @@ def status(
 ):
     """Check the status of a transcript."""
     try:
-        http = HTTPAdapter()
-        result = http.get(f"/api/formats/transcription-status/{transcript_id}")
+        from stemmy_cli.storage.assemblyai import is_assemblyai_configured, get_transcription_status
+
+        if is_assemblyai_configured():
+            result = get_transcription_status(transcript_id)
+        else:
+            http = HTTPAdapter()
+            result = http.get(f"/api/formats/transcription-status/{transcript_id}")
 
         output_result(result, json_output=json_output, title=f"Transcript {transcript_id} status")
 
@@ -321,18 +333,22 @@ def import_transcript(
 ):
     """Import a completed transcript's fragments and entities into the database."""
     try:
+        from stemmy_cli.storage.assemblyai import is_assemblyai_configured, get_transcription_status
+
         adapter = SQLiteAdapter()
-        http = HTTPAdapter(timeout=60.0)
-        
         item = adapter.get_by_id("items", item_id)
         if not item:
             print_error(f"Item {item_id} not found")
             raise typer.Exit(1)
-        
+
         audio_url = item.get("audio_url", "")
-        
+
         print_info(f"Fetching transcript {transcript_id}...")
-        status = http.get(f"/api/formats/transcription-status/{transcript_id}")
+        if is_assemblyai_configured():
+            status = get_transcription_status(transcript_id)
+        else:
+            http = HTTPAdapter(timeout=60.0)
+            status = http.get(f"/api/formats/transcription-status/{transcript_id}")
         
         if status.get("status") != "completed":
             print_error(f"Transcript not complete. Status: {status.get('status')}")

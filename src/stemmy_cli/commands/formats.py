@@ -9,6 +9,7 @@ import feedparser
 
 from stemmy_cli.adapters.sqlite import SQLiteAdapter
 from stemmy_cli.adapters.http import HTTPAdapter
+from stemmy_cli.config import get_config
 from stemmy_cli.output import output_result, print_error, print_success, print_info, print_warning
 
 app = typer.Typer(help="Manage formats (podcasts/shows)")
@@ -204,9 +205,14 @@ def import_episodes(
     url: Optional[str] = typer.Option(None, "--url", "-u", help="RSS URL (uses format's source_url if not provided)"),
     limit: int = typer.Option(10, "--limit", "-l", help="Maximum episodes to import"),
     transcribe: bool = typer.Option(False, "--transcribe", "-t", help="Start transcription for each episode"),
+    normalize: bool = typer.Option(True, "--normalize/--no-normalize", help="Normalize audio (1ms trim, 192k bitrate) for extraction accuracy"),
     json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
 ):
-    """Import multiple episodes from RSS feed into a format."""
+    """Import multiple episodes from RSS feed into a format.
+
+    source_url = original mp3 URL (for deduplication)
+    audio_url = normalized copy (192k, 1ms trim) when --normalize
+    """
     try:
         adapter = SQLiteAdapter()
         
@@ -225,15 +231,19 @@ def import_episodes(
         
         imported = []
         skipped = []
+        api_base = get_config().api_base_url if normalize else None
+        subfolder = f"formats/{format_id}"
         
         for ep in episodes_list:
-            if not ep.get("audio_url"):
+            source_url = ep.get("audio_url", "")
+            if not source_url:
                 skipped.append({"title": ep["title"], "reason": "no audio URL"})
                 continue
             
+            # Dedupe on source_url (original mp3) - same podcast episode = already imported
             existing = adapter.execute_raw(
-                "SELECT id FROM items WHERE format_id = ? AND (audio_url = ? OR title = ?)",
-                [format_id, ep["audio_url"], ep["title"]]
+                "SELECT id, audio_url FROM items WHERE format_id = ? AND source_url = ?",
+                [format_id, source_url]
             )
             if existing:
                 skipped.append({"title": ep["title"], "reason": "already exists"})
@@ -242,15 +252,31 @@ def import_episodes(
             item_id = str(uuid.uuid4())
             now = datetime.utcnow().isoformat()
             
+            if normalize and api_base:
+                print_info(f"Normalizing: {ep['title'][:50]}...")
+                try:
+                    from stemmy_cli.audio.normalize import process_audio_for_import
+                    audio_url = process_audio_for_import(
+                        source_url=source_url,
+                        item_id=item_id,
+                        subfolder=subfolder,
+                        upload_to_api=api_base,
+                    )
+                except Exception as e:
+                    print_warning(f"Normalization failed, using original URL: {e}")
+                    audio_url = source_url
+            else:
+                audio_url = source_url
+            
             item_data = {
                 "id": item_id,
                 "format_id": format_id,
                 "title": ep["title"],
                 "description": ep.get("description", ""),
-                "audio_url": ep["audio_url"],
+                "audio_url": audio_url,
+                "source_url": source_url,
                 "published_at": ep.get("published", now),
                 "duration_seconds": ep.get("duration", 0),
-                "source_url": ep.get("link", ""),
                 "guid": ep.get("guid", ""),
                 "transcript_status": "pending",
                 "created_at": now,

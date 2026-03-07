@@ -1,7 +1,10 @@
 # Stemmy CLI - Python dependencies
 # Install: pip install -r requirements.txt
+# Note: pydub requires ffmpeg for MP3 support
 
 typer>=0.9.0
+pydub>=0.25.0
+boto3>=1.28.0
 rich>=13.0.0
 httpx>=0.25.0
 feedparser>=6.0.0
