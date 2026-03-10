@@ -10,6 +10,7 @@ Provides 20+ search modes organized by category:
 """
 
 import json
+import os
 import time
 import uuid
 from datetime import datetime
@@ -20,7 +21,7 @@ import httpx
 import typer
 
 from stemmy_cli.adapters.sqlite import SQLiteAdapter
-from stemmy_cli.adapters.http import HTTPAdapter
+from stemmy_cli.audio.local_extract import extract_segments_local
 from stemmy_cli.output import output_result, print_error, print_success, print_info, print_warning
 
 # Import all analyzers
@@ -34,8 +35,6 @@ app = typer.Typer(help="Advanced word and text analyzers (20+ modes)")
 
 # Constants
 WORD_BUFFER_MS = 50
-API_BASE_URL = "http://localhost:5000"
-
 
 def _get_fragments_with_words(
     adapter: SQLiteAdapter,
@@ -99,8 +98,8 @@ def _deduplicate_matches(matches: List[Dict], tolerance_ms: int = 100) -> List[D
     return unique
 
 
-def _batch_extract_audio(matches: List[Dict], http: HTTPAdapter) -> List[Dict]:
-    """Extract audio for all matches using batch API (async with polling)."""
+def _batch_extract_audio(matches: List[Dict]) -> List[Dict]:
+    """Extract audio for all matches using local parallel extractor."""
     if not matches:
         return []
     
@@ -120,79 +119,34 @@ def _batch_extract_audio(matches: List[Dict], http: HTTPAdapter) -> List[Dict]:
             "end_time": end_time,
         })
     
-    print_info(f"Extracting {len(segments)} audio segments...")
-    
+    print_info(f"Extracting {len(segments)} audio segments locally...")
+
+    def _progress(current: int, total: int, message: str) -> None:
+        if current == total or current % 25 == 0:
+            print_info(message)
+
     try:
-        # Start async extraction task
-        response = httpx.post(
-            f"{API_BASE_URL}/api/extract-audio-segments",
-            json={"segments": segments},
-            timeout=60.0,
+        extraction_results, failures = extract_segments_local(segments, progress_callback=_progress)
+        print_success(
+            f"Extraction complete: {len(extraction_results)} segments, {len(failures)} failed"
         )
-        
-        if response.status_code != 200:
-            print_error(f"Batch extract failed: {response.status_code}")
-            return []
-        
-        result = response.json()
-        task_id = result.get("task_id")
-        
-        if not task_id:
-            print_error("No task_id received from extraction API")
-            return []
-        
-        print_info(f"Extraction task started: {task_id}")
-        
-        # Poll for completion
-        max_wait = 300
-        poll_interval = 2
-        waited = 0
-        extraction_results = []
-        
-        while waited < max_wait:
-            status_resp = httpx.get(
-                f"{API_BASE_URL}/api/extract-audio-segments-status/{task_id}",
-                timeout=30.0,
-            )
-            
-            if status_resp.status_code != 200:
-                time.sleep(poll_interval)
-                waited += poll_interval
-                continue
-            
-            status = status_resp.json()
-            state = status.get("state")
-            
-            if state == "SUCCESS":
-                result_data = status.get("result", {})
-                extraction_results = result_data.get("segments", []) or result_data.get("results", [])
-                failed_count = result_data.get("stats", {}).get("failed", 0)
-                print_success(f"Extraction complete: {len(extraction_results)} segments, {failed_count} failed")
-                break
-            elif state == "FAILURE":
-                print_error(f"Extraction failed: {status.get('error')}")
-                return []
-            elif state == "PENDING" or state == "STARTED":
-                progress = status.get("progress", 0)
-                print_info(f"Extraction in progress... {progress}%")
-            
-            time.sleep(poll_interval)
-            waited += poll_interval
-        
-        # Map extraction results back to matches
+        result_map = {}
         for ext in extraction_results:
-            # The segment id is nested in ext["segment"]["id"]
-            segment_data = ext.get("segment", {})
-            seg_id = segment_data.get("id") or ext.get("id")
-            audio_url = ext.get("fragment_audio_url") or ext.get("audio_url") or ext.get("url")
-            
-            for m in matches:
-                if m.get("id") == seg_id:
-                    m["extracted_audio_url"] = audio_url
-                    break
-        
+            seg = ext.get("segment", {})
+            seg_id = seg.get("id")
+            if seg_id:
+                result_map[str(seg_id)] = ext
+
+        for m in matches:
+            ext = result_map.get(str(m.get("id")))
+            if not ext:
+                continue
+            audio_url = ext.get("fragment_audio_url") or ext.get("audio_url")
+            if audio_url:
+                m["extracted_audio_url"] = audio_url
+
         return matches
-        
+
     except Exception as e:
         print_error(f"Batch extract error: {e}")
         return []
@@ -224,13 +178,18 @@ def _concatenate_and_upload(
         
         for i, url in enumerate(urls):
             try:
-                resp = httpx.get(url, timeout=30.0)
-                if resp.status_code == 200:
-                    temp_path = Path(tmpdir) / f"seg_{i:04d}.mp3"
-                    temp_path.write_bytes(resp.content)
-                    temp_files.append(str(temp_path))
+                if url.startswith("http"):
+                    resp = httpx.get(url, timeout=30.0)
+                    if resp.status_code == 200:
+                        temp_path = Path(tmpdir) / f"seg_{i:04d}.mp3"
+                        temp_path.write_bytes(resp.content)
+                        temp_files.append(str(temp_path))
+                else:
+                    local_path = Path(url)
+                    if local_path.exists():
+                        temp_files.append(str(local_path))
             except Exception as e:
-                print_warning(f"Failed to download segment {i}: {e}")
+                print_warning(f"Failed to fetch segment {i}: {e}")
         
         if not temp_files:
             print_error("No segments downloaded")
@@ -255,22 +214,23 @@ def _concatenate_and_upload(
     
     print_success(f"Created: {output_path}")
     
-    # Upload to S3
-    try:
-        with open(output_path, "rb") as f:
-            files = {"audio": (output_path.name, f, "audio/mpeg")}
-            response = httpx.post(
-                f"{API_BASE_URL}/api/upload-audio",
-                files=files,
-                timeout=60.0,
-            )
-            
-            if response.status_code == 200:
-                s3_url = response.json().get("url")
-                print_success(f"Uploaded to S3: {s3_url}")
-                return s3_url
-    except Exception as e:
-        print_warning(f"S3 upload failed: {e}")
+    # Optional upload if API base is set via env
+    upload_base = os.getenv("STEMMY_API_BASE_URL")
+    if upload_base:
+        try:
+            with open(output_path, "rb") as f:
+                files = {"audio": (output_path.name, f, "audio/mpeg")}
+                response = httpx.post(
+                    f"{upload_base}/api/upload-audio",
+                    files=files,
+                    timeout=60.0,
+                )
+                if response.status_code == 200:
+                    s3_url = response.json().get("url")
+                    print_success(f"Uploaded to S3: {s3_url}")
+                    return s3_url
+        except Exception as e:
+            print_warning(f"Upload failed: {e}")
     
     return str(output_path)
 
@@ -345,7 +305,6 @@ def lexical_search(
         raise typer.Exit(1)
     
     adapter = SQLiteAdapter()
-    http = HTTPAdapter(API_BASE_URL)
     
     print_info(f"Searching lexical pattern: {mode}" + (f" pattern='{pattern}'" if pattern else ""))
     
@@ -386,7 +345,7 @@ def lexical_search(
     
     if compile and all_matches:
         # Extract audio and create compilation
-        all_matches = _batch_extract_audio(all_matches, http)
+        all_matches = _batch_extract_audio(all_matches)
         output_name = output or f"lexical_{mode}_{pattern or 'all'}"
         _concatenate_and_upload(all_matches, output_name, f"cli-lexical-{mode}")
     else:
@@ -423,7 +382,6 @@ def syntactic_search(
         raise typer.Exit(1)
     
     adapter = SQLiteAdapter()
-    http = HTTPAdapter(API_BASE_URL)
     
     print_info(f"Searching syntactic pattern: {pattern_type}")
     
@@ -462,7 +420,7 @@ def syntactic_search(
     print_success(f"Found {len(all_matches)} matches")
     
     if compile and all_matches:
-        all_matches = _batch_extract_audio(all_matches, http)
+        all_matches = _batch_extract_audio(all_matches)
         output_name = output or f"syntactic_{pattern_type}"
         _concatenate_and_upload(all_matches, output_name, f"cli-syntactic-{pattern_type}")
     else:
@@ -500,7 +458,6 @@ def speaker_search(
         raise typer.Exit(1)
     
     adapter = SQLiteAdapter()
-    http = HTTPAdapter(API_BASE_URL)
     
     print_info(f"Searching speaker pattern: {mode}")
     
@@ -537,7 +494,7 @@ def speaker_search(
     print_success(f"Found {len(all_matches)} matches")
     
     if compile and all_matches:
-        all_matches = _batch_extract_audio(all_matches, http)
+        all_matches = _batch_extract_audio(all_matches)
         output_name = output or f"speaker_{mode}"
         _concatenate_and_upload(all_matches, output_name, f"cli-speaker-{mode}")
     else:
@@ -576,7 +533,6 @@ def style_search(
         raise typer.Exit(1)
     
     adapter = SQLiteAdapter()
-    http = HTTPAdapter(API_BASE_URL)
     
     print_info(f"Searching style pattern: {mode}" + (f"/{subtype}" if subtype else ""))
     
@@ -616,7 +572,7 @@ def style_search(
     print_success(f"Found {len(all_matches)} matches")
     
     if compile and all_matches:
-        all_matches = _batch_extract_audio(all_matches, http)
+        all_matches = _batch_extract_audio(all_matches)
         output_name = output or f"style_{mode}_{subtype or 'all'}"
         _concatenate_and_upload(all_matches, output_name, f"cli-style-{mode}")
     else:
@@ -653,7 +609,6 @@ def text_search(
         raise typer.Exit(1)
     
     adapter = SQLiteAdapter()
-    http = HTTPAdapter(API_BASE_URL)
     
     print_info(f"Searching text pattern: {mode}" + (f"/{metric}" if metric else ""))
     
@@ -689,7 +644,7 @@ def text_search(
     print_success(f"Found {len(all_matches)} matches")
     
     if compile and all_matches:
-        all_matches = _batch_extract_audio(all_matches, http)
+        all_matches = _batch_extract_audio(all_matches)
         output_name = output or f"text_{mode}_{metric or 'all'}"
         _concatenate_and_upload(all_matches, output_name, f"cli-text-{mode}")
     else:

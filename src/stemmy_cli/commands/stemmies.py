@@ -9,6 +9,7 @@ import typer
 
 from stemmy_cli.adapters.sqlite import SQLiteAdapter
 from stemmy_cli.adapters.http import HTTPAdapter
+from stemmy_cli.audio.local_extract import extract_segments_local
 from stemmy_cli.output import output_result, print_error, print_success, print_info
 
 app = typer.Typer(help="Manage stemmies (audio compositions)")
@@ -114,8 +115,6 @@ def generate_sentence(
 ):
     """Generate a single sentence with TTS."""
     try:
-        http = HTTPAdapter()
-
         payload = {
             "text": text,
             "voice_id": voice_id,
@@ -232,29 +231,21 @@ def import_fragments(
                     "start_time": frag.get("start_time"),
                     "end_time": frag.get("end_time"),
                     "text": frag.get("text"),
+                    "audio_url": frag.get("item_audio_url") or frag.get("source_audio_url") or "",
                 })
 
         if not segments:
             print_error("No valid fragments found")
             raise typer.Exit(1)
 
-        payload = {
+        print_info(f"Extracting audio for {len(segments)} fragments locally...")
+        extracted, failed = extract_segments_local(segments)
+        result = {
             "stemmy_id": stemmy_id,
-            "segments": segments,
+            "segments": extracted,
+            "failed": failed,
+            "stats": {"extracted": len(extracted), "failed": len(failed)},
         }
-
-        if wait:
-            print_info(f"Extracting audio for {len(segments)} fragments...")
-            result = http.start_and_wait(
-                "/api/extract-audio-segments",
-                payload,
-                "/api/extract-audio-segments-status/{task_id}",
-                poll_interval=2.0,
-                verbose=True,
-            )
-        else:
-            result = http.post("/api/extract-audio-segments", json=payload)
-            print_success(f"Extraction started: task_id={result.get('task_id')}")
 
         output_result(result, json_output=json_output, title="Import result")
 

@@ -12,6 +12,7 @@ from rich.console import Console
 
 from stemmy_cli.adapters.http import HTTPAdapter
 from stemmy_cli.adapters.sqlite import SQLiteAdapter
+from stemmy_cli.audio.local_extract import extract_segment_local, extract_segments_local
 from stemmy_cli.output import (
     output_result, 
     print_error, 
@@ -114,22 +115,17 @@ def extract_segment(
 ):
     """Extract a single segment from an audio file."""
     try:
-        http = HTTPAdapter(timeout=120.0)
-
-        payload = {
-            "audioUrl": audio_url,
-            "startTime": start_time,
-            "endTime": end_time,
-        }
-
         print_info(f"Extracting segment ({start_time}s - {end_time}s)...")
-        result = http.post("/api/extract-audio-segment", json=payload)
+        output_path = Path(output) if output else None
+        result = extract_segment_local(
+            audio_url=audio_url,
+            start_time=start_time,
+            end_time=end_time,
+            output_path=output_path,
+        )
 
-        extracted_url = result.get("extracted_url") or result.get("audio_url")
-        if extracted_url and output:
-            print_info(f"Downloading audio...")
-            _download_audio(extracted_url, output)
-            print_success(f"Audio saved to: {output}")
+        if result.get("success") and output_path:
+            print_success(f"Audio saved to: {output_path}")
 
         output_result(result, json_output=json_output, title="Extraction result")
 
@@ -147,7 +143,6 @@ def extract_segments(
 ):
     """Extract audio for multiple fragments."""
     try:
-        http = HTTPAdapter()
         adapter = SQLiteAdapter()
 
         ids = [fid.strip() for fid in fragment_ids.split(",")]
@@ -162,29 +157,21 @@ def extract_segments(
                     "start_time": frag.get("start_time"),
                     "end_time": frag.get("end_time"),
                     "text": frag.get("text"),
+                    "audio_url": frag.get("item_audio_url") or frag.get("source_audio_url") or "",
                 })
 
         if not segments:
             print_error("No valid fragments found")
             raise typer.Exit(1)
 
-        payload = {
+        print_info(f"Extracting audio for {len(segments)} segments locally...")
+        extracted, failed = extract_segments_local(segments)
+        result = {
             "item_id": item_id,
-            "segments": segments,
+            "segments": extracted,
+            "failed": failed,
+            "stats": {"extracted": len(extracted), "failed": len(failed)},
         }
-
-        if wait:
-            print_info(f"Extracting audio for {len(segments)} segments...")
-            result = http.start_and_wait(
-                "/api/extract-audio-segments",
-                payload,
-                "/api/extract-audio-segments-status/{task_id}",
-                poll_interval=2.0,
-                verbose=True,
-            )
-        else:
-            result = http.post("/api/extract-audio-segments", json=payload)
-            print_success(f"Extraction started: task_id={result.get('task_id')}")
 
         output_result(result, json_output=json_output, title="Extraction result")
 
