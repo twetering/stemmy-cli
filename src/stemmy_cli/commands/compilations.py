@@ -13,6 +13,7 @@ import typer
 from stemmy_cli.adapters.sqlite import SQLiteAdapter
 from stemmy_cli.adapters.http import HTTPAdapter
 from stemmy_cli.output import output_result, print_error, print_success, print_info, print_warning
+from stemmy_cli.audio.local_extract import extract_segments_local
 
 app = typer.Typer(help="Run compilation recipes")
 
@@ -36,6 +37,13 @@ EXTRACT_MODES = [
     "word_plus",       # Word + N words before/after
     "time_plus",       # Word + X seconds before/after
 ]
+
+
+def _extract_audio_segments_local(segments_payload: List[Dict[str, Any]], label: str) -> List[Dict[str, Any]]:
+    """Extract audio locally and return extraction results."""
+    extracted, failed = extract_segments_local(segments_payload)
+    print_success(f"Extraction complete: {len(extracted)} {label}, {len(failed)} failed")
+    return extracted
 
 
 def _search_words_in_fragments(
@@ -370,7 +378,6 @@ def words_compilation(
     """
     try:
         adapter = SQLiteAdapter()
-        http = HTTPAdapter(timeout=180.0)
         
         print_info(f"Step 1: Searching for word '{word_query}' in transcript data...")
         
@@ -400,46 +407,20 @@ def words_compilation(
                 "audio_url": m["audio_url"],
             })
         
-        extract_result = http.post("/api/extract-audio-segments", json={"segments": segments_payload})
-        task_id = extract_result.get("task_id")
-        
-        if not task_id:
-            print_error("Failed to start extraction task")
-            raise typer.Exit(1)
-        
-        print_info(f"Extraction task started: {task_id}")
-        
-        max_wait = 300
-        poll_interval = 2
-        waited = 0
-        extraction_results = []
-        
-        while waited < max_wait:
-            status = http.get(f"/api/extract-audio-segments-status/{task_id}")
-            state = status.get("state")
-            
-            if state == "SUCCESS":
-                result_data = status.get("result", {})
-                extraction_results = result_data.get("segments", []) or result_data.get("results", [])
-                failed_count = result_data.get("stats", {}).get("failed", 0)
-                print_success(f"Extraction complete: {len(extraction_results)} words, {failed_count} failed")
-                break
-            elif state == "FAILURE":
-                print_error(f"Extraction failed: {status.get('error')}")
-                raise typer.Exit(1)
-            else:
-                progress = status.get("meta", {})
-                if progress.get("percent"):
-                    print_info(f"Extracting... {progress.get('percent')}% ({progress.get('current', 0)}/{progress.get('total', 0)})")
-                time.sleep(poll_interval)
-                waited += poll_interval
+        extraction_results = _extract_audio_segments_local(segments_payload, "words")
         
         if not extraction_results:
             print_error("Extraction timed out or returned no results")
             raise typer.Exit(1)
         
         extracted_urls = []
-        for r in extraction_results:
+        result_map = {
+            str(r.get("segment", {}).get("id")): r for r in extraction_results
+        }
+        for m in word_matches:
+            r = result_map.get(str(m.get("id")))
+            if not r:
+                continue
             url = r.get("fragment_audio_url")
             if url:
                 extracted_urls.append({
@@ -461,10 +442,16 @@ def words_compilation(
         downloaded_files = []
         for i, ex in enumerate(extracted_urls):
             part_path = temp_dir / f"word_{i:03d}.mp3"
-            response = httpx.get(ex["url"], follow_redirects=True, timeout=60.0)
-            if response.status_code == 200:
-                part_path.write_bytes(response.content)
-                downloaded_files.append(part_path)
+            url = ex["url"]
+            if url.startswith("http"):
+                response = httpx.get(url, follow_redirects=True, timeout=60.0)
+                if response.status_code == 200:
+                    part_path.write_bytes(response.content)
+                    downloaded_files.append(part_path)
+            else:
+                local_path = Path(url)
+                if local_path.exists():
+                    downloaded_files.append(local_path)
         
         with open(file_list_path, "w") as f:
             for df in downloaded_files:
@@ -626,7 +613,6 @@ def sentences_compilation(
     """
     try:
         adapter = SQLiteAdapter()
-        http = HTTPAdapter(timeout=180.0)
         
         mode_desc = f"search={search_mode}, extract={extract_mode}"
         print_info(f"Step 1: Searching for '{query}' ({mode_desc})...")
@@ -669,46 +655,20 @@ def sentences_compilation(
                 "audio_url": m["audio_url"],
             })
         
-        extract_result = http.post("/api/extract-audio-segments", json={"segments": segments_payload})
-        task_id = extract_result.get("task_id")
-        
-        if not task_id:
-            print_error("Failed to start extraction task")
-            raise typer.Exit(1)
-        
-        print_info(f"Extraction task started: {task_id}")
-        
-        max_wait = 300
-        poll_interval = 2
-        waited = 0
-        extraction_results = []
-        
-        while waited < max_wait:
-            status = http.get(f"/api/extract-audio-segments-status/{task_id}")
-            state = status.get("state")
-            
-            if state == "SUCCESS":
-                result_data = status.get("result", {})
-                extraction_results = result_data.get("segments", []) or result_data.get("results", [])
-                failed_count = result_data.get("stats", {}).get("failed", 0)
-                print_success(f"Extraction complete: {len(extraction_results)} segments, {failed_count} failed")
-                break
-            elif state == "FAILURE":
-                print_error(f"Extraction failed: {status.get('error')}")
-                raise typer.Exit(1)
-            else:
-                progress = status.get("meta", {})
-                if progress.get("percent"):
-                    print_info(f"Extracting... {progress.get('percent')}% ({progress.get('current', 0)}/{progress.get('total', 0)})")
-                time.sleep(poll_interval)
-                waited += poll_interval
+        extraction_results = _extract_audio_segments_local(segments_payload, "segments")
         
         if not extraction_results:
             print_error("Extraction timed out or returned no results")
             raise typer.Exit(1)
         
         extracted_urls = []
-        for r in extraction_results:
+        result_map = {
+            str(r.get("segment", {}).get("id")): r for r in extraction_results
+        }
+        for m in matches:
+            r = result_map.get(str(m.get("id")))
+            if not r:
+                continue
             url = r.get("fragment_audio_url")
             if url:
                 extracted_urls.append({
@@ -730,10 +690,16 @@ def sentences_compilation(
         downloaded_files = []
         for i, ex in enumerate(extracted_urls):
             part_path = temp_dir / f"segment_{i:03d}.mp3"
-            response = httpx.get(ex["url"], follow_redirects=True, timeout=60.0)
-            if response.status_code == 200:
-                part_path.write_bytes(response.content)
-                downloaded_files.append(part_path)
+            url = ex["url"]
+            if url.startswith("http"):
+                response = httpx.get(url, follow_redirects=True, timeout=60.0)
+                if response.status_code == 200:
+                    part_path.write_bytes(response.content)
+                    downloaded_files.append(part_path)
+            else:
+                local_path = Path(url)
+                if local_path.exists():
+                    downloaded_files.append(local_path)
         
         with open(file_list_path, "w") as f:
             for df in downloaded_files:
@@ -893,7 +859,6 @@ def entities_compilation(
     """
     try:
         adapter = SQLiteAdapter()
-        http = HTTPAdapter(timeout=180.0)
         
         mode_desc = f"search={search_mode}"
         if entity_type:
@@ -1008,46 +973,20 @@ def entities_compilation(
                 "audio_url": e["source_audio_url"],
             })
         
-        extract_result = http.post("/api/extract-audio-segments", json={"segments": segments_payload})
-        task_id = extract_result.get("task_id")
-        
-        if not task_id:
-            print_error("Failed to start extraction task")
-            raise typer.Exit(1)
-        
-        print_info(f"Extraction task started: {task_id}")
-        
-        max_wait = 300
-        poll_interval = 2
-        waited = 0
-        extraction_results = []
-        
-        while waited < max_wait:
-            status = http.get(f"/api/extract-audio-segments-status/{task_id}")
-            state = status.get("state")
-            
-            if state == "SUCCESS":
-                result_data = status.get("result", {})
-                extraction_results = result_data.get("segments", []) or result_data.get("results", [])
-                failed_count = result_data.get("stats", {}).get("failed", 0)
-                print_success(f"Extraction complete: {len(extraction_results)} segments, {failed_count} failed")
-                break
-            elif state == "FAILURE":
-                print_error(f"Extraction failed: {status.get('error')}")
-                raise typer.Exit(1)
-            else:
-                progress = status.get("meta", {})
-                if progress.get("percent"):
-                    print_info(f"Extracting... {progress.get('percent')}% ({progress.get('current', 0)}/{progress.get('total', 0)})")
-                time.sleep(poll_interval)
-                waited += poll_interval
+        extraction_results = _extract_audio_segments_local(segments_payload, "segments")
         
         if not extraction_results:
             print_error("Extraction timed out or returned no results")
             raise typer.Exit(1)
         
         extracted_urls = []
-        for r in extraction_results:
+        result_map = {
+            str(r.get("segment", {}).get("id")): r for r in extraction_results
+        }
+        for e in entities:
+            r = result_map.get(str(e.get("id")))
+            if not r:
+                continue
             url = r.get("fragment_audio_url")
             if url:
                 extracted_urls.append({
@@ -1069,10 +1008,16 @@ def entities_compilation(
         downloaded_files = []
         for i, ex in enumerate(extracted_urls):
             part_path = temp_dir / f"entity_{i:03d}.mp3"
-            response = httpx.get(ex["url"], follow_redirects=True, timeout=60.0)
-            if response.status_code == 200:
-                part_path.write_bytes(response.content)
-                downloaded_files.append(part_path)
+            url = ex["url"]
+            if url.startswith("http"):
+                response = httpx.get(url, follow_redirects=True, timeout=60.0)
+                if response.status_code == 200:
+                    part_path.write_bytes(response.content)
+                    downloaded_files.append(part_path)
+            else:
+                local_path = Path(url)
+                if local_path.exists():
+                    downloaded_files.append(local_path)
         
         with open(file_list_path, "w") as f:
             for df in downloaded_files:
@@ -1886,46 +1831,20 @@ def extract_and_compile(
                 "audio_url": f["audio_url"],
             })
         
-        extract_result = http.post("/api/extract-audio-segments", json={"segments": segments_payload})
-        task_id = extract_result.get("task_id")
-        
-        if not task_id:
-            print_error("Failed to start extraction task")
-            raise typer.Exit(1)
-        
-        print_info(f"Extraction task started: {task_id}")
-        
-        max_wait = 300
-        poll_interval = 2
-        waited = 0
-        extraction_results = []
-        
-        while waited < max_wait:
-            status = http.get(f"/api/extract-audio-segments-status/{task_id}")
-            state = status.get("state")
-            
-            if state == "SUCCESS":
-                result_data = status.get("result", {})
-                extraction_results = result_data.get("segments", []) or result_data.get("results", [])
-                failed_count = result_data.get("stats", {}).get("failed", 0)
-                print_success(f"Extraction complete: {len(extraction_results)} segments, {failed_count} failed")
-                break
-            elif state == "FAILURE":
-                print_error(f"Extraction failed: {status.get('error')}")
-                raise typer.Exit(1)
-            else:
-                progress = status.get("meta", {})
-                if progress.get("percent"):
-                    print_info(f"Extracting... {progress.get('percent')}% ({progress.get('current', 0)}/{progress.get('total', 0)})")
-                time.sleep(poll_interval)
-                waited += poll_interval
+        extraction_results = _extract_audio_segments_local(segments_payload, "segments")
         
         if not extraction_results:
             print_error("Extraction timed out or returned no results")
             raise typer.Exit(1)
         
         extracted_urls = []
-        for r in extraction_results:
+        result_map = {
+            str(r.get("segment", {}).get("id")): r for r in extraction_results
+        }
+        for f in fragments:
+            r = result_map.get(str(f.get("id")))
+            if not r:
+                continue
             url = r.get("fragment_audio_url")
             if url:
                 extracted_urls.append({
@@ -2032,10 +1951,16 @@ def extract_and_compile(
             downloaded_files = []
             for i, part in enumerate(audio_parts):
                 part_path = temp_dir / f"part_{i:03d}.mp3"
-                response = httpx.get(part["url"], follow_redirects=True, timeout=60.0)
-                if response.status_code == 200:
-                    part_path.write_bytes(response.content)
-                    downloaded_files.append(part_path)
+                url = part["url"]
+                if url.startswith("http"):
+                    response = httpx.get(url, follow_redirects=True, timeout=60.0)
+                    if response.status_code == 200:
+                        part_path.write_bytes(response.content)
+                        downloaded_files.append(part_path)
+                else:
+                    local_path = Path(url)
+                    if local_path.exists():
+                        downloaded_files.append(local_path)
             
             with open(file_list_path, "w") as f:
                 for df in downloaded_files:
@@ -2094,12 +2019,20 @@ def extract_and_compile(
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
             print_info("Downloading final audio...")
-            response = httpx.get(final_url, follow_redirects=True, timeout=120.0)
-            if response.status_code == 200:
-                output_path.write_bytes(response.content)
-                print_success(f"Audio saved to: {output}")
+            if final_url.startswith("http"):
+                response = httpx.get(final_url, follow_redirects=True, timeout=120.0)
+                if response.status_code == 200:
+                    output_path.write_bytes(response.content)
+                    print_success(f"Audio saved to: {output}")
+                else:
+                    print_error(f"Failed to download final audio: HTTP {response.status_code}")
             else:
-                print_error(f"Failed to download final audio: HTTP {response.status_code}")
+                local_path = Path(final_url)
+                if local_path.exists():
+                    output_path.write_bytes(local_path.read_bytes())
+                    print_success(f"Audio saved to: {output}")
+                else:
+                    print_error("Final audio path not found")
         
         if save_to_db:
             print_info("Saving compilation to database...")

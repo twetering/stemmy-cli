@@ -14,6 +14,165 @@ from stemmy_cli.config import get_database_path
 from stemmy_cli.paths import get_output_dir, get_music_dir, get_project_root
 
 
+def _fetch_rows(cursor: Any) -> List[Any]:
+    """Fetch all rows from a cursor with defensive fallbacks."""
+    if cursor is None:
+        return []
+    try:
+        rows = cursor.fetchall()
+    except Exception:
+        try:
+            rows = list(cursor)
+        except Exception:
+            return []
+    if rows is cursor:
+        try:
+            rows = list(cursor)
+        except Exception:
+            return []
+    return rows or []
+
+
+def _row_to_dict(row: Any, columns: Optional[List[str]]) -> Dict[str, Any]:
+    """Convert a row to dict across sqlite/libsql cursor formats."""
+    if row is None:
+        return {}
+    if isinstance(row, dict):
+        return row
+    if hasattr(row, "keys"):
+        try:
+            return dict(row)
+        except Exception:
+            pass
+    if columns and isinstance(row, (list, tuple)):
+        return {columns[i]: row[i] for i in range(min(len(columns), len(row)))}
+    return {"_row": row}
+
+
+SENTENCE_PAUSE_MS = 750
+DEFAULT_MAX_SENTENCE_SECONDS = 3.0
+
+
+def _word_text(word: Dict[str, Any]) -> str:
+    return word.get("text", word.get("word", "")) or ""
+
+
+def _words_time_scale(words: List[Dict[str, Any]]) -> float:
+    max_end = 0.0
+    for w in words:
+        val = w.get("end", w.get("end_time", 0)) or 0
+        try:
+            max_end = max(max_end, float(val))
+        except (TypeError, ValueError):
+            continue
+    return 1000.0 if max_end <= 1000.0 else 1.0
+
+
+def _word_time_ms(word: Dict[str, Any], key: str, scale: float) -> float:
+    val = word.get(key, word.get(f"{key}_time", 0)) or 0
+    try:
+        return float(val) * scale
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _split_sentences(
+    words: List[Dict[str, Any]],
+    max_sentence_seconds: float = DEFAULT_MAX_SENTENCE_SECONDS,
+) -> List[Dict[str, Any]]:
+    """Split words into sentence segments using punctuation and pauses."""
+    if not words:
+        return []
+
+    scale = _words_time_scale(words)
+    texts = [_word_text(w) for w in words]
+    starts = [_word_time_ms(w, "start", scale) for w in words]
+    ends = [_word_time_ms(w, "end", scale) for w in words]
+
+    boundaries: List[tuple] = []
+    start_idx = 0
+    for i in range(len(words)):
+        text = texts[i]
+        end_of_sentence = any(p in text for p in ".!?")
+        if i < len(words) - 1:
+            pause_ms = starts[i + 1] - ends[i]
+            if pause_ms > SENTENCE_PAUSE_MS:
+                end_of_sentence = True
+        if end_of_sentence:
+            boundaries.append((start_idx, i))
+            start_idx = i + 1
+    if start_idx < len(words):
+        boundaries.append((start_idx, len(words) - 1))
+
+    results = []
+    for s, e in boundaries:
+        start_ms = starts[s]
+        end_ms = ends[e]
+        if end_ms <= start_ms:
+            continue
+        duration = (end_ms - start_ms) / 1000.0
+        if max_sentence_seconds and duration > max_sentence_seconds:
+            continue
+        text = " ".join(t for t in texts[s : e + 1] if t).strip()
+        if not text:
+            continue
+        last_text = texts[e]
+        end_punct = "?" if "?" in last_text else "!" if "!" in last_text else "." if "." in last_text else ""
+        results.append(
+            {
+                "text": text,
+                "start_time": start_ms / 1000.0,
+                "end_time": end_ms / 1000.0,
+                "duration": duration,
+                "end_punct": end_punct,
+                "start_idx": s,
+                "end_idx": e,
+            }
+        )
+    return results
+
+
+def _sentence_for_word_index(
+    words: List[Dict[str, Any]],
+    word_index: int,
+    max_sentence_seconds: float = DEFAULT_MAX_SENTENCE_SECONDS,
+) -> Optional[Dict[str, Any]]:
+    """Get sentence segment containing a word index."""
+    if word_index is None or word_index < 0:
+        return None
+    sentences = _split_sentences(words, max_sentence_seconds=max_sentence_seconds)
+    for s in sentences:
+        if s["start_idx"] <= word_index <= s["end_idx"]:
+            return s
+    return None
+
+
+def _dedupe_segments(
+    results: List[Dict[str, Any]],
+    tolerance_ms: int = 50,
+) -> List[Dict[str, Any]]:
+    """Deduplicate by audio_url + timing (with tolerance)."""
+    seen: List[tuple] = []
+    unique: List[Dict[str, Any]] = []
+    for r in results:
+        audio_url = r.get("audio_url") or r.get("item_audio_url") or r.get("source_audio_url") or ""
+        try:
+            start_ms = int(float(r.get("start_time", 0) or 0) * 1000)
+            end_ms = int(float(r.get("end_time", 0) or 0) * 1000)
+        except (TypeError, ValueError):
+            start_ms, end_ms = 0, 0
+        is_dup = False
+        for seen_url, seen_start, seen_end in seen:
+            if seen_url == audio_url:
+                if abs(seen_start - start_ms) <= tolerance_ms and abs(seen_end - end_ms) <= tolerance_ms:
+                    is_dup = True
+                    break
+        if not is_dup:
+            seen.append((audio_url, start_ms, end_ms))
+            unique.append(r)
+    return unique
+
+
 def _get_db_path() -> Path:
     """Get database path."""
     return get_database_path()
@@ -39,8 +198,8 @@ def _get_db_connection():
         except AttributeError:
             pass  # Turso/libsql doesn't support row_factory
         return conn
-    except ImportError:
-        # Fallback to direct SQLite if connection module not available
+    except Exception:
+        # Fallback to direct SQLite if connection module not available or fails
         db_path = _get_db_path()
         if not db_path.exists():
             raise FileNotFoundError(f"Database not found at {db_path}. Set STEMMY_DB_PATH environment variable.")
@@ -107,15 +266,16 @@ def _search_fragments(
     sql += f" LIMIT {limit}"
     
     cursor = conn.execute(sql, params)
+    columns = [c[0] for c in cursor.description] if getattr(cursor, "description", None) else None
     results = []
-    for row in cursor.fetchall():
-        r = dict(row)
+    for row in _fetch_rows(cursor):
+        r = _row_to_dict(row, columns)
         # Use fallback audio URL if item_audio_url is None
         if not r.get("item_audio_url") and r.get("item_audio_url_fallback"):
             r["item_audio_url"] = r["item_audio_url_fallback"]
         results.append(r)
     conn.close()
-    return results
+    return _dedupe_segments(results, tolerance_ms=50)[:limit]
 
 
 def _search_semantic(
@@ -166,14 +326,15 @@ def _search_semantic(
         row = cursor.fetchone()
         if not row:
             continue
-        d = dict(row)
+        columns = [c[0] for c in cursor.description] if getattr(cursor, "description", None) else None
+        d = _row_to_dict(row, columns)
         if not d.get("item_audio_url") and d.get("item_audio_url_fallback"):
             d["item_audio_url"] = d["item_audio_url_fallback"]
         d["similarity"] = r["similarity"]
         results.append(d)
     
     conn.close()
-    return results
+    return _dedupe_segments(results, tolerance_ms=50)
 
 
 def _search_hybrid(
@@ -209,6 +370,7 @@ def _search_hybrid(
             r["similarity"] = r.get("similarity", 0.5)  # Default for text match
             merged.append(r)
     
+    merged = _dedupe_segments(merged, tolerance_ms=50)
     return merged[:limit]
 
 
@@ -240,9 +402,10 @@ def _search_entities(
     sql += f" LIMIT {limit}"
     
     cursor = conn.execute(sql, params)
-    results = [dict(row) for row in cursor.fetchall()]
+    columns = [c[0] for c in cursor.description] if getattr(cursor, "description", None) else None
+    results = [_row_to_dict(row, columns) for row in _fetch_rows(cursor)]
     conn.close()
-    return results
+    return _dedupe_segments(results, tolerance_ms=50)[:limit]
 
 
 def _list_formats(limit: int = 20) -> List[Dict[str, Any]]:
@@ -255,8 +418,9 @@ def _list_formats(limit: int = 20) -> List[Dict[str, Any]]:
         ORDER BY created_at DESC
         LIMIT ?
     """, [limit])
-    
-    results = [dict(row) for row in cursor.fetchall()]
+
+    columns = [c[0] for c in cursor.description] if getattr(cursor, "description", None) else None
+    results = [_row_to_dict(row, columns) for row in _fetch_rows(cursor)]
     conn.close()
     return results
 
@@ -272,8 +436,9 @@ def _get_format_items(format_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         ORDER BY published_at DESC
         LIMIT ?
     """, [format_id, limit])
-    
-    results = [dict(row) for row in cursor.fetchall()]
+
+    columns = [c[0] for c in cursor.description] if getattr(cursor, "description", None) else None
+    results = [_row_to_dict(row, columns) for row in _fetch_rows(cursor)]
     conn.close()
     return results
 
@@ -284,6 +449,7 @@ def _analyze_lexical(
     item_id: Optional[str] = None,
     format_id: Optional[str] = None,
     limit: int = 50,
+    max_sentence_seconds: float = DEFAULT_MAX_SENTENCE_SECONDS,
 ) -> List[Dict[str, Any]]:
     """Run lexical analysis on fragments.
     
@@ -325,21 +491,45 @@ def _analyze_lexical(
     sql += " ORDER BY RANDOM()"
     
     cursor = conn.execute(sql, params)
+    columns = [c[0] for c in cursor.description] if getattr(cursor, "description", None) else None
     results = []
     
     # Streaming approach: process rows until we have enough results
     # This searches widely but stops early once limit is reached
     target_results = limit * 3  # Collect more than needed for variety
+    pattern_norm = pattern.strip()
+    sentence_prefix_search = (mode == "starts_with" and " " in pattern_norm)
+    pattern_lc = pattern_norm.lower()
     
-    for row in cursor:
+    for row in _fetch_rows(cursor):
         if len(results) >= target_results:
             break
-            
         try:
-            row_dict = dict(row)
+            row_dict = _row_to_dict(row, columns)
             words_data = json.loads(row_dict.get("words", "[]")) if row_dict.get("words") else []
             audio_url = row_dict.get("item_audio_url") or row_dict.get("fallback_audio_url") or ""
-            
+            if not words_data:
+                continue
+
+            if sentence_prefix_search:
+                for sent in _split_sentences(words_data, max_sentence_seconds=max_sentence_seconds):
+                    if sent["text"].lower().startswith(pattern_lc):
+                        results.append({
+                            "id": f"{row_dict.get('id','')}_{int(sent['start_time']*1000)}_{int(sent['end_time']*1000)}",
+                            "word": "",
+                            "text": sent["text"],
+                            "start_time": sent["start_time"],
+                            "end_time": sent["end_time"],
+                            "duration": sent["duration"],
+                            "audio_url": audio_url,
+                            "fragment_id": row_dict.get("id", ""),
+                            "item_id": row_dict.get("item_id", ""),
+                            "item_title": row_dict.get("item_title", ""),
+                            "mode": mode,
+                            "pattern": pattern,
+                        })
+                continue
+
             matches = search_lexical_pattern(
                 words_data=words_data,
                 mode=mode,
@@ -349,11 +539,24 @@ def _analyze_lexical(
                 item_id=row_dict.get("item_id", ""),
                 item_title=row_dict.get("item_title", ""),
             )
-            results.extend(matches)
+            for m in matches:
+                sent = _sentence_for_word_index(
+                    words_data, m.get("word_index", -1), max_sentence_seconds=max_sentence_seconds
+                )
+                if not sent:
+                    continue
+                m["text"] = sent["text"]
+                m["start_time"] = sent["start_time"]
+                m["end_time"] = sent["end_time"]
+                m["duration"] = sent["duration"]
+                results.append(m)
         except (json.JSONDecodeError, KeyError, TypeError):
             continue
     
     conn.close()
+    
+    # Deduplicate sentence-level results
+    results = _dedupe_segments(results, tolerance_ms=50)
     
     # Shuffle to ensure variety across different sources
     import random
@@ -368,6 +571,7 @@ def _analyze_text(
     item_id: Optional[str] = None,
     format_id: Optional[str] = None,
     limit: int = 50,
+    max_sentence_seconds: float = DEFAULT_MAX_SENTENCE_SECONDS,
 ) -> List[Dict[str, Any]]:
     """
     Run text analysis on fragments.
@@ -384,14 +588,14 @@ def _analyze_text(
     """
     conn = _get_db_connection()
     
-    # Simple modes that work on fragment text directly
-    if mode == "questions":
+    # Sentence-based modes: questions and exclamations
+    if mode in ("questions", "exclamations"):
         sql = """
-            SELECT f.id, f.text, f.item_audio_url, f.item_id, f.start_time, f.end_time,
+            SELECT f.id, f.words, f.item_audio_url, f.item_id,
                    i.audio_url as fallback_audio_url
             FROM fragments f
             LEFT JOIN items i ON f.item_id = i.id
-            WHERE f.text LIKE '%?%'
+            WHERE f.words IS NOT NULL AND f.words != '[]'
         """
         params = []
         if item_id:
@@ -400,52 +604,37 @@ def _analyze_text(
         elif format_id:
             sql += " AND i.format_id = ?"
             params.append(format_id)
-        sql += f" ORDER BY RANDOM() LIMIT {limit}"
+        sql += " ORDER BY RANDOM()"
         
         cursor = conn.execute(sql, params)
+        columns = [c[0] for c in cursor.description] if getattr(cursor, "description", None) else None
         results = []
-        for row in cursor.fetchall():
-            row_dict = dict(row)
-            results.append({
-                "text": row_dict.get("text", ""),
-                "start_time": float(row_dict.get("start_time", 0) or 0),
-                "end_time": float(row_dict.get("end_time", 0) or 0),
-                "item_audio_url": row_dict.get("item_audio_url") or row_dict.get("fallback_audio_url"),
-                "fragment_id": row_dict.get("id"),
-            })
+        for row in _fetch_rows(cursor):
+            if len(results) >= limit:
+                break
+            row_dict = _row_to_dict(row, columns)
+            try:
+                words_data = json.loads(row_dict.get("words", "[]")) if row_dict.get("words") else []
+            except (json.JSONDecodeError, TypeError):
+                continue
+            audio_url = row_dict.get("item_audio_url") or row_dict.get("fallback_audio_url")
+            for sent in _split_sentences(words_data, max_sentence_seconds=max_sentence_seconds):
+                if mode == "questions" and sent["end_punct"] != "?":
+                    continue
+                if mode == "exclamations" and sent["end_punct"] != "!":
+                    continue
+                results.append({
+                    "text": sent["text"],
+                    "start_time": sent["start_time"],
+                    "end_time": sent["end_time"],
+                    "item_audio_url": audio_url,
+                    "audio_url": audio_url,
+                    "fragment_id": row_dict.get("id"),
+                })
+                if len(results) >= limit:
+                    break
         conn.close()
-        return results
-    
-    elif mode == "exclamations":
-        sql = """
-            SELECT f.id, f.text, f.item_audio_url, f.item_id, f.start_time, f.end_time,
-                   i.audio_url as fallback_audio_url
-            FROM fragments f
-            LEFT JOIN items i ON f.item_id = i.id
-            WHERE f.text LIKE '%!%'
-        """
-        params = []
-        if item_id:
-            sql += " AND f.item_id = ?"
-            params.append(item_id)
-        elif format_id:
-            sql += " AND i.format_id = ?"
-            params.append(format_id)
-        sql += f" ORDER BY RANDOM() LIMIT {limit}"
-        
-        cursor = conn.execute(sql, params)
-        results = []
-        for row in cursor.fetchall():
-            row_dict = dict(row)
-            results.append({
-                "text": row_dict.get("text", ""),
-                "start_time": float(row_dict.get("start_time", 0) or 0),
-                "end_time": float(row_dict.get("end_time", 0) or 0),
-                "item_audio_url": row_dict.get("item_audio_url") or row_dict.get("fallback_audio_url"),
-                "fragment_id": row_dict.get("id"),
-            })
-        conn.close()
-        return results
+        return _dedupe_segments(results, tolerance_ms=50)
     
     # Other modes use word-level analysis
     from stemmy_cli.analyzers.text import search_text_pattern
@@ -467,11 +656,12 @@ def _analyze_text(
     sql += f" LIMIT 500"
     
     cursor = conn.execute(sql, params)
+    columns = [c[0] for c in cursor.description] if getattr(cursor, "description", None) else None
     results = []
     
-    for row in cursor.fetchall():
+    for row in _fetch_rows(cursor):
         try:
-            row_dict = dict(row)
+            row_dict = _row_to_dict(row, columns)
             words_data = json.loads(row_dict.get("words", "[]")) if row_dict.get("words") else []
             audio_url = row_dict.get("item_audio_url") or row_dict.get("fallback_audio_url") or ""
             
@@ -489,7 +679,7 @@ def _analyze_text(
             continue
     
     conn.close()
-    return results[:limit]
+    return _dedupe_segments(results, tolerance_ms=50)[:limit]
 
 
 def _get_database_stats() -> Dict[str, int]:

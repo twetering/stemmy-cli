@@ -27,6 +27,7 @@ from stemmy_cli.output import (
 )
 from stemmy_cli.viz import print_audio_preview
 from stemmy_cli.config import get_database_path
+from stemmy_cli.audio.local_extract import extract_segments_local
 
 app = typer.Typer(help="Creative audio recipes")
 console = Console()
@@ -119,13 +120,12 @@ def _generate_tts(text: str, voice: str = "alloy") -> Optional[str]:
 
 
 def _extract_audio_segments(segments: List[Dict[str, Any]]) -> List[str]:
-    """Extract audio segments and return URLs."""
+    """Extract audio segments locally and return paths."""
     if not segments:
         return []
     
-    # Build payload
-    payload = {
-        "segments": [
+    try:
+        segments_payload = [
             {
                 "id": str(i),
                 "audio_url": s["audio_url"],
@@ -135,38 +135,13 @@ def _extract_audio_segments(segments: List[Dict[str, Any]]) -> List[str]:
             for i, s in enumerate(segments)
             if s.get("audio_url") and s.get("start_ms") is not None
         ]
-    }
-    
-    if not payload["segments"]:
-        return []
-    
-    try:
-        with httpx.Client(timeout=120.0) as client:
-            response = client.post(
-                f"{API_BASE}/api/extract-audio-segments",
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            
-            task_id = data.get("task_id")
-            if not task_id:
-                return []
-            
-            # Poll for completion
-            import time
-            for _ in range(60):
-                time.sleep(2)
-                status_resp = client.get(f"{API_BASE}/api/extract-audio-segments-status/{task_id}")
-                status_data = status_resp.json()
-                
-                if status_data.get("status") == "completed":
-                    results = status_data.get("results", [])
-                    return [r.get("fragment_audio_url") for r in results if r.get("fragment_audio_url")]
-                elif status_data.get("status") == "failed":
-                    return []
-            
+        if not segments_payload:
             return []
+
+        extracted, failed = extract_segments_local(segments_payload)
+        if failed:
+            console.print(f"[dim]Extract failed for {len(failed)} segments[/dim]")
+        return [r.get("fragment_audio_url") for r in extracted if r.get("fragment_audio_url")]
     except Exception as e:
         console.print(f"[dim]Extract error: {e}[/dim]")
         return []
