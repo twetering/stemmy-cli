@@ -99,16 +99,15 @@ def build_env_vars(extra: dict = None) -> list[dict]:
 
 
 def build_start_command(rss_url: str, format_id: str, offset: int, limit: int,
-                        language: str, beam_size: int) -> str:
+                        language: str, beam_size: int,
+                        retry_pending: bool = False) -> str:
     """Bouw het bash-commando dat de pod uitvoert na opstarten."""
-    # Installeer deps als ze nog niet aanwezig zijn (FALLBACK_IMAGE heeft geen Python packages)
     setup = (
         "set -e; "
         "pip install -q faster-whisper httpx feedparser boto3 2>/dev/null || true; "
         "which python3 || ln -sf /usr/bin/python3.11 /usr/bin/python3 || true; "
     )
 
-    # Kloon/update de worker repo
     clone = (
         "if [ ! -d /workspace/stemmy-transcription-worker ]; then "
         "  git clone https://github.com/twetering/stemmy-transcription-worker.git "
@@ -120,17 +119,32 @@ def build_start_command(rss_url: str, format_id: str, offset: int, limit: int,
     )
 
     lang_arg = f"--language {language}" if language else "--language auto"
+    offset_arg = f"--offset {offset}" if offset else ""
+    limit_arg = f"--limit {limit}" if limit else ""
 
-    run = (
-        f"python3 stemmy_batch.py "
-        f"--rss '{rss_url}' "
-        f"--format-id '{format_id}' "
-        f"--offset {offset} --limit {limit} "
-        f"{lang_arg} "
-        f"--beam-size {beam_size} "
-        f"--auto-terminate "
-        f"2>&1 | tee /workspace/pod_log.txt"
-    )
+    if retry_pending:
+        # Retry-mode: geen RSS-parsing, direct vanuit Turso
+        run = (
+            f"python3 stemmy_batch.py "
+            f"--retry-pending "
+            f"--format-id '{format_id}' "
+            f"{offset_arg} {limit_arg} "
+            f"{lang_arg} "
+            f"--beam-size {beam_size} "
+            f"--auto-terminate "
+            f"2>&1 | tee /workspace/pod_log.txt"
+        )
+    else:
+        run = (
+            f"python3 stemmy_batch.py "
+            f"--rss '{rss_url}' "
+            f"--format-id '{format_id}' "
+            f"{offset_arg} {limit_arg} "
+            f"{lang_arg} "
+            f"--beam-size {beam_size} "
+            f"--auto-terminate "
+            f"2>&1 | tee /workspace/pod_log.txt"
+        )
 
     return setup + clone + run
 
@@ -234,7 +248,7 @@ def notify_telegram(message: str):
 
 def main():
     ap = argparse.ArgumentParser(description="Start N RunPod pods voor batch-transcriptie")
-    ap.add_argument("--rss", required=True, help="RSS feed URL")
+    ap.add_argument("--rss", default=None, help="RSS feed URL (niet nodig bij --retry-pending)")
     ap.add_argument("--pods", type=int, default=3, help="Aantal pods (default: 3)")
     ap.add_argument("--gpu", default="RTX_A5000",
                     choices=list(GPU_PRESETS.keys()),
@@ -244,8 +258,10 @@ def main():
     ap.add_argument("--language", default=None,
                     help="Taalcode voor Whisper (nl/en/auto)")
     ap.add_argument("--beam-size", type=int, default=5)
+    ap.add_argument("--retry-pending", action="store_true",
+                    help="Retry-mode: verwerk alleen pending items uit Turso (vereist --format-id)")
     ap.add_argument("--total", type=int, default=0,
-                    help="Totaal afleveringen (0 = auto-detecteer via RSS)")
+                    help="Totaal afleveringen (0 = auto-detecteer via RSS of Turso)")
     ap.add_argument("--dry-run", action="store_true",
                     help="Toon plan zonder pods te starten")
     ap.add_argument("--wait-for-ssh", action="store_true",
@@ -262,17 +278,58 @@ def main():
         if not os.environ.get(key) and not (key == "TURSO_URL" and os.environ.get("TURSO_DB_URL")):
             print(f"⚠️  {key} niet gezet", file=sys.stderr)
 
-    # Tel episodes
+    # Validatie
+    if args.retry_pending and not args.format_id:
+        print("❌ --retry-pending vereist --format-id", file=sys.stderr)
+        sys.exit(1)
+    if not args.retry_pending and not args.rss:
+        print("❌ Geef --rss op (of gebruik --retry-pending met --format-id)", file=sys.stderr)
+        sys.exit(1)
+
+    # Tel te verwerken items
     total = args.total
-    if not total:
+    feed_title = args.rss or args.format_id
+
+    if args.retry_pending:
+        # Tel pending items in Turso
+        if not total:
+            turso_url = os.environ.get("TURSO_URL") or os.environ.get("TURSO_DB_URL", "")
+            turso_token = os.environ.get("TURSO_TOKEN") or os.environ.get("TURSO_API_KEY", "")
+            if not turso_url:
+                # Laad uit .env
+                env_file = Path(__file__).parent.parent / ".env"
+                if env_file.exists():
+                    for line in env_file.read_text().splitlines():
+                        if "=" in line and not line.startswith("#"):
+                            k, _, v = line.partition("=")
+                            os.environ.setdefault(k.strip(), v.strip())
+                turso_url = os.environ.get("TURSO_URL") or os.environ.get("TURSO_DB_URL", "")
+                turso_token = os.environ.get("TURSO_TOKEN") or os.environ.get("TURSO_API_KEY", "")
+
+            try:
+                rows = httpx.post(
+                    turso_url.replace("libsql://", "https://") + "/v2/pipeline",
+                    headers={"Authorization": f"Bearer {turso_token}", "Content-Type": "application/json"},
+                    json={"requests": [{"type": "execute", "stmt": {"sql":
+                        f"SELECT COUNT(*) as n, f.title FROM items i JOIN formats f ON f.id = i.format_id "
+                        f"WHERE i.format_id = '{args.format_id}' AND i.transcript_status = 'pending'"}},
+                        {"type": "close"}]}, timeout=20
+                ).json()["results"][0].get("response", {}).get("result", {})
+                cols = [c["name"] for c in rows.get("cols", [])]
+                r = dict(zip(cols, [cell["value"] for cell in rows.get("rows", [[]])[0]]))
+                total = int(r.get("n", 0))
+                feed_title = r.get("title", args.format_id)
+                print(f"[turso] {feed_title}: {total} pending items")
+            except Exception as e:
+                print(f"⚠️  Kon pending count niet ophalen: {e}")
+                total = args.total or 19  # fallback
+    elif not total:
         total, feed_title, _ = count_rss_episodes(args.rss)
         print(f"[rss] {feed_title}: {total} afleveringen met audio")
-    else:
-        feed_title = args.rss
 
     if total == 0:
-        print("❌ Geen afleveringen gevonden in RSS-feed", file=sys.stderr)
-        sys.exit(1)
+        print("✅ Niets te doen — geen pending items gevonden.", file=sys.stderr)
+        sys.exit(0)
 
     # Verdeel over N pods
     n = min(args.pods, total)
@@ -312,12 +369,13 @@ def main():
 
         env_vars = build_env_vars()
         start_cmd = build_start_command(
-            rss_url=args.rss,
+            rss_url=args.rss or "",
             format_id=format_id,
             offset=s["offset"],
             limit=s["limit"],
             language=args.language,
             beam_size=args.beam_size,
+            retry_pending=args.retry_pending,
         )
 
         try:
