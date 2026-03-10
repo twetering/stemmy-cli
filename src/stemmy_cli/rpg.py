@@ -6,6 +6,8 @@ Like a classic text adventure: you navigate through proven options.
 """
 
 import os
+import traceback
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 
@@ -40,6 +42,8 @@ class RPGShell:
         self.session = PromptSession(style=get_style())
         self.running = True
         self.debug = debug
+        os.environ.setdefault("STEMMY_DB_STATUS", "1")
+        os.environ.setdefault("STEMMY_DB_PREFER_SQLITE", "1")
         
         # State for multi-step workflows
         self.selected_format: Optional[Dict] = None
@@ -48,11 +52,73 @@ class RPGShell:
         
         # Available music files
         self.music_files = self._scan_music()
+
+        # Log file for errors
+        self._log_path = self._get_log_path()
     
     def _debug(self, msg: str):
         """Print debug message if debug mode is on."""
         if self.debug:
             console.print(f"[dim cyan]DEBUG: {msg}[/dim cyan]")
+
+    def _get_log_path(self) -> Path:
+        """Get log file path for RPG errors."""
+        from stemmy_cli.paths import get_project_root
+        log_dir = get_project_root() / "data" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir / "stemmy_rpg.log"
+
+    def _log_exception(self, context: str, exc: BaseException) -> Path:
+        """Append exception details to RPG log file."""
+        ts = datetime.utcnow().isoformat()
+        with open(self._log_path, "a") as f:
+            f.write(f"[{ts}] {context}\n")
+            f.write(f"{repr(exc)}\n")
+            f.write(traceback.format_exc())
+            f.write("\n")
+        return self._log_path
+
+    def _tool_default(self, name: str) -> Any:
+        """Default return on tool failure."""
+        if name in ("get_database_stats",):
+            return {}
+        if name.startswith(("list_", "search_", "analyze_")):
+            return []
+            return {"success": False, "error": "Tool execution failed"}
+
+    def _execute_tool_safe(self, name: str, **kwargs) -> Any:
+        """Execute tool with error handling and logging."""
+        try:
+            console.print(f"[dim]Database: {name}...[/dim]")
+            from stemmy_cli.agent.tools import execute_tool
+            return execute_tool(name, **kwargs)
+        except Exception as e:
+            log_path = self._log_exception(f"Tool '{name}' failed", e)
+            console.print(f"[red]Database error: {e}[/red]")
+            console.print(f"[dim]Log: {log_path}[/dim]")
+            return self._tool_default(name)
+
+    def _dedupe_results(self, results: List[Dict[str, Any]], tolerance_ms: int = 50) -> List[Dict[str, Any]]:
+        """Deduplicate results by audio_url + timing."""
+        seen = []
+        unique = []
+        for r in results:
+            audio_url = r.get("audio_url") or r.get("item_audio_url") or r.get("source_audio_url") or ""
+            try:
+                start_ms = int(float(r.get("start_time", 0) or 0) * 1000)
+                end_ms = int(float(r.get("end_time", 0) or 0) * 1000)
+            except (TypeError, ValueError):
+                start_ms, end_ms = 0, 0
+            is_dup = False
+            for seen_url, seen_start, seen_end in seen:
+                if seen_url == audio_url:
+                    if abs(seen_start - start_ms) <= tolerance_ms and abs(seen_end - end_ms) <= tolerance_ms:
+                        is_dup = True
+                        break
+            if not is_dup:
+                seen.append((audio_url, start_ms, end_ms))
+                unique.append(r)
+        return unique
     
     def _scan_music(self) -> List[Path]:
         """Find available background music in static/music/."""
@@ -78,9 +144,9 @@ class RPGShell:
     ) -> Dict[str, Any]:
         """Create compilation with step-by-step progress display."""
         from stemmy_cli.agent.tools import (
-            _search_fragments, _search_entities, _extract_word_timings,
-            _batch_extract_audio, _get_output_dir
+            _search_fragments, _search_entities, _extract_word_timings
         )
+        from stemmy_cli.audio.local_extract import extract_segments_local
         import subprocess
         import tempfile
         import random
@@ -102,16 +168,23 @@ class RPGShell:
             all_segments = []
             
             for query in queries:
-                if compilation_type == "entity":
-                    segs = _search_entities(query, format_id=format_id, limit=limit_per_query)
-                else:
-                    segs = _search_fragments(query, format_id=format_id, limit=limit_per_query)
-                
-                # Extract word timings if requested
-                if use_word_timing and segs:
-                    word_segs = _extract_word_timings(segs, query)
-                    if word_segs:
-                        segs = word_segs
+                try:
+                    if compilation_type == "entity":
+                        segs = _search_entities(query, format_id=format_id, limit=limit_per_query)
+                    else:
+                        segs = _search_fragments(query, format_id=format_id, limit=limit_per_query)
+                    
+                    # Extract word timings if requested
+                    if use_word_timing and segs:
+                        word_segs = _extract_word_timings(segs, query)
+                        if word_segs:
+                            segs = word_segs
+                except Exception as e:
+                    log_path = self._log_exception("Search query failed", e)
+                    progress.update(task, description="[red]✗ Database fout[/red]", completed=100, detail="")
+                    console.print(f"[red]Database error: {e}[/red]")
+                    console.print(f"[dim]Log: {log_path}[/dim]")
+                    return {"success": False, "error": "Database query failed"}
                 
                 for seg in segs:
                     seg["source_query"] = query
@@ -127,52 +200,39 @@ class RPGShell:
             random.shuffle(all_segments)
             
             # Step 2: Extract audio (50%)
-            progress.update(task, description="🎵 Audio extracten", completed=35, detail=f"0/{len(all_segments)}")
+            progress.update(task, description="🎵 Audio extracten (parallel)", completed=35, detail=f"0/{len(all_segments)}")
             
             temp_dir = Path(tempfile.gettempdir()) / f"stemmy_rpg_{id(self)}"
             temp_dir.mkdir(exist_ok=True)
             
-            extracted = 0
-            extract_results = []
-            
-            for i, seg in enumerate(all_segments[:50]):  # Limit to 50
+            segments_to_extract = []
+            for i, seg in enumerate(all_segments):
                 audio_url = seg.get("audio_url") or seg.get("item_audio_url") or seg.get("source_audio_url")
                 start = float(seg.get("start_time", 0) or 0)
                 end = float(seg.get("end_time", 0) or 0)
-                
                 if start > 10000:
                     start, end = start / 1000, end / 1000
-                
                 if not audio_url or end <= start:
                     continue
-                
-                seg_path = temp_dir / f"segment_{i:03d}.mp3"
-                
-                # Extract with padding and fade
-                padding = 0.05
-                fade = 0.015
-                padded_start = max(0, start - padding)
-                padded_duration = (end - start) + (2 * padding)
-                
-                cmd = [
-                    "ffmpeg", "-y", "-ss", str(padded_start),
-                    "-i", audio_url, "-t", str(padded_duration),
-                    "-af", f"afade=t=in:d={fade},afade=t=out:st={padded_duration - fade}:d={fade}",
-                    "-c:a", "libmp3lame", "-q:a", "2",
-                    str(seg_path)
-                ]
-                
-                try:
-                    subprocess.run(cmd, capture_output=True, timeout=30)
-                    if seg_path.exists() and seg_path.stat().st_size > 0:
-                        extract_results.append(seg_path)
-                        extracted += 1
-                except Exception:
-                    pass
-                
-                # Update progress (30% to 80%)
-                pct = 30 + (50 * (i + 1) / min(len(all_segments), 50))
-                progress.update(task, completed=pct, detail=f"{extracted}/{i+1}")
+                segments_to_extract.append({
+                    "id": str(i),
+                    "audio_url": audio_url,
+                    "start_time": start,
+                    "end_time": end,
+                })
+            
+            def update_progress(current: int, total: int, _msg: str) -> None:
+                pct = 35 + (50 * current / max(total, 1))
+                progress.update(task, completed=pct, detail=f"{current}/{total}")
+            
+            successes, failures = extract_segments_local(
+                segments_to_extract,
+                output_dir=temp_dir,
+                progress_callback=update_progress,
+            )
+            
+            extract_results = [Path(r["output_path"]) for r in successes]
+            extracted = len(extract_results)
             
             if not extract_results:
                 progress.update(task, description="[red]✗ Extractie mislukt[/red]", completed=100, detail="")
@@ -432,9 +492,7 @@ class RPGShell:
         console.print()
         console.print("[dim]Bezig met maken...[/dim]")
         
-        from stemmy_cli.agent.tools import execute_tool
-        
-        result = execute_tool(
+        result = self._execute_tool_safe(
             "create_compilation",
             query=query,
             compilation_type="fragment",
@@ -505,10 +563,8 @@ class RPGShell:
         console.print()
         console.print("[dim]Bezig met maken...[/dim]")
         
-        from stemmy_cli.agent.tools import execute_tool
-        
         # Use shuffled compilation with entity search
-        result = execute_tool(
+        result = self._execute_tool_safe(
             "create_shuffled_compilation",
             queries=[entity_type] if entity_type else ["person_name", "organization"],
             compilation_type="word",
@@ -562,9 +618,7 @@ class RPGShell:
         console.print()
         console.print("[dim]Bezig met semantisch zoeken en compilatie...[/dim]")
         
-        from stemmy_cli.agent.tools import execute_tool
-        
-        result = execute_tool(
+        result = self._execute_tool_safe(
             "create_compilation",
             query=query,
             compilation_type="fragment",
@@ -622,9 +676,7 @@ class RPGShell:
         console.print()
         console.print("[dim]Bezig met hybrid zoeken en compilatie...[/dim]")
         
-        from stemmy_cli.agent.tools import execute_tool
-        
-        result = execute_tool(
+        result = self._execute_tool_safe(
             "create_compilation",
             query=query,
             compilation_type="fragment",
@@ -656,9 +708,10 @@ class RPGShell:
         
         if self._prompt("Filter") not in ("j", "ja", "y", "yes"):
             return None
-        
-        from stemmy_cli.agent.tools import execute_tool
-        formats = execute_tool("list_formats", limit=20)
+        formats = self._execute_tool_safe("list_formats", limit=20)
+        if not formats:
+            console.print("[yellow]Geen podcasts beschikbaar (database leeg of fout)[/yellow]")
+            return None
         
         console.print()
         console.print("[bold]Beschikbare podcasts:[/bold]")
@@ -702,18 +755,28 @@ class RPGShell:
         format_id = self._select_format_optional()
         
         console.print()
+        max_limit = 500
+        default_limit = 50
+        console.print(f"[cyan]Hoeveel resultaten?[/cyan] [dim](default: {default_limit}, max: {max_limit})[/dim]")
+        limit_str = self._prompt("Limit")
+        if limit_str.isdigit():
+            limit = min(int(limit_str), max_limit)
+        else:
+            limit = default_limit
+        
+        console.print()
         console.print("[dim]Zoeken...[/dim]")
         
-        from stemmy_cli.agent.tools import execute_tool
-        
         if mode == "2":
-            results = execute_tool("search_semantic", query=query, format_id=format_id, limit=15)
+            results = self._execute_tool_safe("search_semantic", query=query, format_id=format_id, limit=limit)
         else:
-            results = execute_tool("search_fragments", query=query, format_id=format_id, limit=15)
+            results = self._execute_tool_safe("search_fragments", query=query, format_id=format_id, limit=limit)
         
         if not results:
             console.print("[yellow]Geen resultaten gevonden[/yellow]")
             return
+        
+        results = self._dedupe_results(results)
         
         console.print()
         console.print(f"[green]Gevonden: {len(results)} fragmenten[/green]")
@@ -813,22 +876,31 @@ class RPGShell:
         
         # Optional format filter
         format_id = self._select_format_optional()
+
+        # Result limit
+        console.print()
+        max_limit = 500
+        default_limit = 30 if mode not in ("questions", "exclamations") else 200
+        console.print(f"[cyan]Hoeveel resultaten?[/cyan] [dim](default: {default_limit}, max: {max_limit})[/dim]")
+        limit_str = self._prompt("Limit")
+        if limit_str.isdigit():
+            limit = min(int(limit_str), max_limit)
+        else:
+            limit = default_limit
         
         console.print()
         console.print("[dim]Zoeken...[/dim]")
-        
-        from stemmy_cli.agent.tools import execute_tool
         
         # Debug output
         self._debug(f"mode={mode}, pattern='{pattern}', format_id={format_id}")
         
         # Use lexical analyzer for word patterns, text analyzer for sentence patterns
         if mode in ("questions", "exclamations"):
-            self._debug(f"Calling analyze_text(mode={mode}, format_id={format_id}, limit=20)")
-            results = execute_tool("analyze_text", mode=mode, format_id=format_id, limit=20)
+            self._debug(f"Calling analyze_text(mode={mode}, format_id={format_id}, limit={limit})")
+            results = self._execute_tool_safe("analyze_text", mode=mode, format_id=format_id, limit=limit)
         else:
-            self._debug(f"Calling analyze_lexical(mode={mode}, pattern={pattern}, format_id={format_id}, limit=30)")
-            results = execute_tool("analyze_lexical", mode=mode, pattern=pattern, format_id=format_id, limit=30)
+            self._debug(f"Calling analyze_lexical(mode={mode}, pattern={pattern}, format_id={format_id}, limit={limit})")
+            results = self._execute_tool_safe("analyze_lexical", mode=mode, pattern=pattern, format_id=format_id, limit=limit)
         
         self._debug(f"Received {len(results) if results else 0} results")
         
@@ -837,6 +909,8 @@ class RPGShell:
             if self.debug:
                 console.print("[dim]Tip: Probeer zonder podcast filter of met ander patroon[/dim]")
             return
+        
+        results = self._dedupe_results(results)
         
         console.print()
         console.print(f"[green]Gevonden: {len(results)} matches[/green]")
@@ -890,15 +964,25 @@ class RPGShell:
         format_id = self._select_format_optional()
         
         console.print()
-        console.print("[dim]Semantisch zoeken...[/dim]")
+        max_limit = 500
+        default_limit = 50
+        console.print(f"[cyan]Hoeveel resultaten?[/cyan] [dim](default: {default_limit}, max: {max_limit})[/dim]")
+        limit_str = self._prompt("Limit")
+        if limit_str.isdigit():
+            limit = min(int(limit_str), max_limit)
+        else:
+            limit = default_limit
         
-        from stemmy_cli.agent.tools import execute_tool
-        results = execute_tool("search_semantic", query=query, format_id=format_id, limit=20)
+        console.print()
+        console.print("[dim]Semantisch zoeken...[/dim]")
+        results = self._execute_tool_safe("search_semantic", query=query, format_id=format_id, limit=limit)
         
         if not results:
             console.print("[yellow]Geen resultaten gevonden[/yellow]")
             console.print("[dim]Tip: Run 'stemmy embeddings build' als embeddings nog niet bestaan[/dim]")
             return
+        
+        results = self._dedupe_results(results)
         
         console.print()
         console.print(f"[green]Gevonden: {len(results)} fragmenten[/green]")
@@ -935,6 +1019,7 @@ class RPGShell:
         pattern: str = ""
     ):
         """Create compilation from search/analyze results."""
+        results = self._dedupe_results(results)
         console.print()
         console.print("[cyan]Hoeveel clips gebruiken?[/cyan] [dim](default: alle)[/dim]")
         limit_str = self._prompt("Limit")
@@ -1100,9 +1185,10 @@ class RPGShell:
         console.print("[bold]═══ PODCASTS/FORMATS ═══[/bold]")
         console.print()
         console.print("[dim]Laden...[/dim]")
-        
-        from stemmy_cli.agent.tools import execute_tool
-        formats = execute_tool("list_formats", limit=25)
+        formats = self._execute_tool_safe("list_formats", limit=25)
+        if not formats:
+            console.print("[yellow]Geen podcasts gevonden[/yellow]")
+            return
         
         console.print()
         table = Table(show_header=True, header_style="bold", box=None)
@@ -1196,9 +1282,7 @@ class RPGShell:
         console.print()
         console.print("[dim]Mixen...[/dim]")
         
-        from stemmy_cli.agent.tools import execute_tool
-        
-        result = execute_tool(
+        result = self._execute_tool_safe(
             "mix_with_background_music",
             voice_track=filepath,
             music_track=music_path,
@@ -1228,9 +1312,8 @@ class RPGShell:
     
     def _show_stats(self):
         """Show database stats."""
-        from stemmy_cli.agent.tools import execute_tool
         
-        stats = execute_tool("get_database_stats")
+        stats = self._execute_tool_safe("get_database_stats")
         
         console.print()
         console.print("[bold]═══ DATABASE STATS ═══[/bold]")

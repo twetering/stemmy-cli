@@ -13,6 +13,7 @@ The embedded replica provides:
 
 import os
 import sqlite3
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
@@ -30,6 +31,21 @@ except ImportError:
     except ImportError:
         LIBSQL_AVAILABLE = False
 
+logger = logging.getLogger(__name__)
+def _status(message: str) -> None:
+    """Emit a status message when enabled."""
+    if os.getenv("STEMMY_DB_STATUS", "").lower() in ("1", "true", "yes", "on"):
+        print(f"[db] {message}")
+
+
+class DatabaseQueryError(RuntimeError):
+    """Raised when a database query fails."""
+
+    def __init__(self, message: str, sql: Optional[str] = None, params: Optional[tuple] = None):
+        super().__init__(message)
+        self.sql = sql
+        self.params = params
+
 
 class DatabaseConnection:
     """Unified database connection wrapper."""
@@ -44,12 +60,26 @@ class DatabaseConnection:
     
     def execute(self, sql: str, params: tuple = ()) -> Any:
         cursor = self._conn.cursor()
-        cursor.execute(sql, tuple(params) if params else ())
+        try:
+            cursor.execute(sql, tuple(params) if params else ())
+        except Exception as e:
+            raise DatabaseQueryError(
+                f"Database query failed: {e}",
+                sql=sql,
+                params=tuple(params) if params else (),
+            ) from e
         return cursor
     
     def executemany(self, sql: str, params_list: list) -> Any:
         cursor = self._conn.cursor()
-        cursor.executemany(sql, params_list)
+        try:
+            cursor.executemany(sql, params_list)
+        except Exception as e:
+            raise DatabaseQueryError(
+                f"Database batch query failed: {e}",
+                sql=sql,
+                params=None,
+            ) from e
         return cursor
     
     def fetchall(self, sql: str, params: tuple = ()) -> list:
@@ -72,7 +102,10 @@ class DatabaseConnection:
     def sync(self):
         """Sync embedded replica with cloud (Turso only)."""
         if self._is_turso and hasattr(self._conn, 'sync'):
-            self._conn.sync()
+            try:
+                self._conn.sync()
+            except BaseException as e:
+                logger.warning("Turso sync failed: %s", e)
     
     def cursor(self) -> Any:
         return self._conn.cursor()
@@ -109,6 +142,7 @@ def get_turso_connection() -> Optional[DatabaseConnection]:
         return None
     
     try:
+        _status("Connecting to Turso replica...")
         # Local replica path
         from stemmy_cli.paths import get_project_root
         replica_dir = get_project_root() / "data"
@@ -121,13 +155,20 @@ def get_turso_connection() -> Optional[DatabaseConnection]:
             auth_token=turso_token,
         )
         
-        # Initial sync
-        conn.sync()
+        # Initial sync (safe, optional)
+        sync_on_connect = os.getenv("TURSO_SYNC_ON_CONNECT", "1").lower() not in ("0", "false", "no")
+        if sync_on_connect:
+            try:
+                conn.sync()
+            except BaseException as e:
+                logger.warning("Initial Turso sync failed, continuing with local replica: %s", e)
+        else:
+            logger.info("Turso sync on connect disabled (TURSO_SYNC_ON_CONNECT=0)")
         
         return DatabaseConnection(conn, is_turso=True)
     
     except Exception as e:
-        print(f"[warning] Turso connection failed: {e}")
+        logger.warning("Turso connection failed: %s", e)
         return None
 
 
@@ -143,6 +184,7 @@ def get_sqlite_connection() -> DatabaseConnection:
             "Set STEMMY_DB_PATH environment variable or ensure data/stemmy.db exists."
         )
     
+    _status(f"Using local SQLite ({db_path})")
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     
@@ -163,10 +205,18 @@ def get_connection(prefer_turso: bool = True) -> DatabaseConnection:
     from stemmy_cli.config import get_config
     get_config()
 
+    prefer_sqlite_env = os.getenv("STEMMY_DB_PREFER_SQLITE", "").lower() in ("1", "true", "yes", "on")
+    if prefer_sqlite_env:
+        prefer_turso = False
+
     if prefer_turso:
-        turso_conn = get_turso_connection()
-        if turso_conn:
-            return turso_conn
+        try:
+            turso_conn = get_turso_connection()
+            if turso_conn:
+                _status("Turso replica ready")
+                return turso_conn
+        except Exception as e:
+            logger.warning("Turso connection error, falling back to SQLite: %s", e)
     
     return get_sqlite_connection()
 

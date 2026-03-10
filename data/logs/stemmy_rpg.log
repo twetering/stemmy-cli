@@ -1,0 +1,126 @@
+[2026-03-10T21:10:45.436468] Tool 'list_formats' failed
+IndentationError("expected an indented block after 'except' statement on line 31", ('/Users/tom/projects/stemmy_cli/src/stemmy_cli/adapters/connection.py', 32, 0, 'LIBSQL_AVAILABLE = False\n', 32, -1))
+Traceback (most recent call last):
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/rpg.py", line 93, in _execute_tool_safe
+    return execute_tool(name, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 1926, in execute_tool
+    return handler(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 250, in _list_formats
+    conn = _get_db_connection()
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 35, in _get_db_connection
+    from stemmy_cli.adapters.connection import get_connection
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/adapters/connection.py", line 32
+    LIBSQL_AVAILABLE = False
+IndentationError: expected an indented block after 'except' statement on line 31
+
+[2026-03-10T21:10:45.445284] Tool 'analyze_lexical' failed
+IndentationError("expected an indented block after 'except' statement on line 31", ('/Users/tom/projects/stemmy_cli/src/stemmy_cli/adapters/connection.py', 32, 0, 'LIBSQL_AVAILABLE = False\n', 32, -1))
+Traceback (most recent call last):
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/rpg.py", line 93, in _execute_tool_safe
+    return execute_tool(name, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 1926, in execute_tool
+    return handler(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 302, in _analyze_lexical
+    conn = _get_db_connection()
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 35, in _get_db_connection
+    from stemmy_cli.adapters.connection import get_connection
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/adapters/connection.py", line 32
+    LIBSQL_AVAILABLE = False
+IndentationError: expected an indented block after 'except' statement on line 31
+
+[2026-03-10T21:11:10.598373] Tool 'list_formats' failed
+IndentationError("expected an indented block after 'except' statement on line 31", ('/Users/tom/projects/stemmy_cli/src/stemmy_cli/adapters/connection.py', 32, 0, 'LIBSQL_AVAILABLE = False\n', 32, -1))
+Traceback (most recent call last):
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/rpg.py", line 93, in _execute_tool_safe
+    return execute_tool(name, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 1926, in execute_tool
+    return handler(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 250, in _list_formats
+    conn = _get_db_connection()
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 35, in _get_db_connection
+    from stemmy_cli.adapters.connection import get_connection
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/adapters/connection.py", line 32
+    LIBSQL_AVAILABLE = False
+IndentationError: expected an indented block after 'except' statement on line 31
+
+[2026-03-10T21:11:10.604686] Tool 'analyze_lexical' failed
+IndentationError("expected an indented block after 'except' statement on line 31", ('/Users/tom/projects/stemmy_cli/src/stemmy_cli/adapters/connection.py', 32, 0, 'LIBSQL_AVAILABLE = False\n', 32, -1))
+Traceback (most recent call last):
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/rpg.py", line 93, in _execute_tool_safe
+    return execute_tool(name, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 1926, in execute_tool
+    return handler(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 302, in _analyze_lexical
+    conn = _get_db_connection()
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 35, in _get_db_connection
+    from stemmy_cli.adapters.connection import get_connection
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/adapters/connection.py", line 32
+    LIBSQL_AVAILABLE = False
+IndentationError: expected an indented block after 'except' statement on line 31
+
+[2026-03-10T21:18:42.168268] Tool 'list_formats' failed
+ValueError('dictionary update sequence element #0 has length 30; 2 is required')
+Traceback (most recent call last):
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/rpg.py", line 93, in _execute_tool_safe
+    return execute_tool(name, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 1926, in execute_tool
+    return handler(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 259, in _list_formats
+    results = [dict(row) for row in cursor.fetchall()]
+               ^^^^^^^^^
+ValueError: dictionary update sequence element #0 has length 30; 2 is required
+
+[2026-03-10T21:19:00.696732] Tool 'analyze_lexical' failed
+TypeError("'builtins.Cursor' object is not iterable")
+Traceback (most recent call last):
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/rpg.py", line 93, in _execute_tool_safe
+    return execute_tool(name, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 1926, in execute_tool
+    return handler(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 334, in _analyze_lexical
+    for row in cursor:
+TypeError: 'builtins.Cursor' object is not iterable
+
+[2026-03-10T21:19:42.489621] Tool 'list_formats' failed
+ValueError('dictionary update sequence element #0 has length 30; 2 is required')
+Traceback (most recent call last):
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/rpg.py", line 93, in _execute_tool_safe
+    return execute_tool(name, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 1926, in execute_tool
+    return handler(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 259, in _list_formats
+    results = [dict(row) for row in cursor.fetchall()]
+               ^^^^^^^^^
+ValueError: dictionary update sequence element #0 has length 30; 2 is required
+
+[2026-03-10T21:19:48.598399] Tool 'analyze_lexical' failed
+TypeError("'builtins.Cursor' object is not iterable")
+Traceback (most recent call last):
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/rpg.py", line 93, in _execute_tool_safe
+    return execute_tool(name, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 1926, in execute_tool
+    return handler(**kwargs)
+           ^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 334, in _analyze_lexical
+    for row in cursor:
+TypeError: 'builtins.Cursor' object is not iterable
+
