@@ -1,0 +1,24 @@
+{
+  "format_id": "d46d3da0-3e35-4507-9bf2-45525e8b9024",
+  "feed_title": "Ervaring voor Beginners (retry)",
+  "total_episodes": 19,
+  "pods": 2,
+  "gpu": "RTX_A5000",
+  "language": "nl",
+  "pod_splits": [
+    {
+      "pod_index": 1,
+      "pod_id": "o9bzj38zap94yi",
+      "offset": 0,
+      "limit": 10,
+      "status": "launching"
+    },
+    {
+      "pod_index": 2,
+      "pod_id": "tf9x61d9v5i1y4",
+      "offset": 10,
+      "limit": 9,
+      "status": "launching"
+    }
+  ]
+}

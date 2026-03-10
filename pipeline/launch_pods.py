@@ -82,10 +82,20 @@ def runpod_api(query: str, api_key: str) -> dict:
 
 
 def build_env_vars(extra: dict = None) -> list[dict]:
-    """Bouw env-var lijst voor RunPod pod."""
+    """Bouw env-var lijst voor RunPod pod.
+    Normaliseert env-var namen: TURSO_DB_URL → TURSO_URL etc.
+    """
+    # Normaliseer: accepteer zowel TURSO_URL als TURSO_DB_URL
+    turso_url = os.environ.get("TURSO_URL") or os.environ.get("TURSO_DB_URL")
+    turso_token = os.environ.get("TURSO_TOKEN") or os.environ.get("TURSO_API_KEY")
+    if not turso_url:
+        raise ValueError("TURSO_URL of TURSO_DB_URL is niet gezet")
+    if not turso_token:
+        raise ValueError("TURSO_TOKEN of TURSO_API_KEY is niet gezet")
+
     required = {
-        "TURSO_URL": os.environ["TURSO_URL"],
-        "TURSO_TOKEN": os.environ.get("TURSO_TOKEN") or os.environ.get("TURSO_API_KEY"),
+        "TURSO_URL": turso_url,
+        "TURSO_TOKEN": turso_token,
         "AWS_ACCESS_KEY_ID": os.environ["AWS_ACCESS_KEY_ID"],
         "AWS_SECRET_ACCESS_KEY": os.environ["AWS_SECRET_ACCESS_KEY"],
         "AWS_REGION": os.environ.get("AWS_REGION", "eu-north-1"),
@@ -153,47 +163,54 @@ def launch_pod(api_key: str, gpu_preset: str, pod_name: str,
                start_cmd: str, env_vars: list, container_disk_gb: int = 20) -> dict:
     """Start één RunPod pod. Retourneert pod-info dict."""
     gpu = GPU_PRESETS[gpu_preset]
-    env_str = ", ".join(
-        f'{{key: "{e["key"]}", value: "{e["value"]}"}}'
-        for e in env_vars
-    )
-
-    mutation = f"""
-    mutation {{
-      podFindAndDeployOnDemand(input: {{
-        name: "{pod_name}",
-        imageName: "{DOCKER_IMAGE}",
-        gpuCount: {gpu["gpuCount"]},
-        gpuTypeId: "{gpu["gpuTypeId"]}",
-        minMemoryInGb: {gpu["minMemoryInGb"]},
-        containerDiskInGb: {container_disk_gb},
-        volumeInGb: 0,
-        startJupyter: false,
-        startSsh: true,
-        dockerStartCmd: "{start_cmd.replace('"', '\\"')}",
-        envs: [{env_str}],
-        supportPublicIp: true,
-        ports: "22/tcp",
-      }})
-      {{
+    # Gebruik GraphQL variabelen i.p.v. inline string-escaping (voorkomt injection + 400 errors)
+    query = """
+    mutation PodLaunch($input: PodFindAndDeployOnDemandInput!) {
+      podFindAndDeployOnDemand(input: $input) {
         id
         name
         machineId
         desiredStatus
-        runtime {{
-          ports {{
+        runtime {
+          ports {
             ip
             isIpPublic
             privatePort
             publicPort
-          }}
-        }}
-      }}
-    }}
+          }
+        }
+      }
+    }
     """
 
-    data = runpod_api(mutation, api_key)
-    return data.get("podFindAndDeployOnDemand", {})
+    variables = {
+        "input": {
+            "name": pod_name,
+            "imageName": DOCKER_IMAGE,
+            "gpuCount": gpu["gpuCount"],
+            "gpuTypeId": gpu["gpuTypeId"],
+            "minMemoryInGb": gpu["minMemoryInGb"],
+            "containerDiskInGb": container_disk_gb,
+            "volumeInGb": 0,
+            "startJupyter": False,
+            "startSsh": True,
+            "dockerArgs": start_cmd,   # was: dockerStartCmd (veld bestaat niet meer)
+            "env": env_vars,           # was: envs (veld bestaat niet meer)
+            "supportPublicIp": True,
+            "ports": "22/tcp",
+        }
+    }
+
+    resp = httpx.post(
+        f"{RUNPOD_GQL}?api_key={api_key}",
+        json={"query": query, "variables": variables},
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if "errors" in data:
+        raise RuntimeError(f"RunPod API fout: {data['errors'][0]['message'][:200]}")
+    return data.get("data", {}).get("podFindAndDeployOnDemand", {})
 
 
 def get_pod_info(api_key: str, pod_id: str) -> dict:
