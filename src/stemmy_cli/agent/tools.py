@@ -235,47 +235,66 @@ def _search_fragments(
 ) -> List[Dict[str, Any]]:
     """Search audio fragments by text."""
     conn = _get_db_connection()
+    query_norm = (query or "").strip().lower()
+    if not query_norm:
+        return []
+    tokens = [t for t in query_norm.split() if t]
     
     # Always join with items to get audio_url fallback
     if format_id:
-        sql = """
+        base_sql = """
             SELECT f.id, f.text, f.start_time, f.end_time, 
                    f.item_id, f.item_audio_url, f.speaker_label, f.words,
                    i.audio_url as item_audio_url_fallback
             FROM fragments f
             JOIN items i ON f.item_id = i.id
-            WHERE f.text LIKE ?
-            AND i.format_id = ?
         """
-        params = [f"%{query}%", format_id]
     else:
-        sql = """
+        base_sql = """
             SELECT f.id, f.text, f.start_time, f.end_time, 
                    f.item_id, f.item_audio_url, f.speaker_label, f.words,
                    i.audio_url as item_audio_url_fallback
             FROM fragments f
             LEFT JOIN items i ON f.item_id = i.id
-            WHERE f.text LIKE ?
         """
-        params = [f"%{query}%"]
-    
-    if item_id:
-        sql += " AND f.item_id = ?"
-        params.append(item_id)
-    
-    sql += f" LIMIT {limit}"
-    
-    cursor = conn.execute(sql, params)
-    columns = [c[0] for c in cursor.description] if getattr(cursor, "description", None) else None
-    results = []
-    for row in _fetch_rows(cursor):
-        r = _row_to_dict(row, columns)
-        # Use fallback audio URL if item_audio_url is None
-        if not r.get("item_audio_url") and r.get("item_audio_url_fallback"):
-            r["item_audio_url"] = r["item_audio_url_fallback"]
-        results.append(r)
+
+    def _run_query(where_sql: str, params: List[Any]) -> List[Dict[str, Any]]:
+        sql = base_sql + " WHERE " + where_sql
+        final_params = list(params)
+        if format_id:
+            sql += " AND i.format_id = ?"
+            final_params.append(format_id)
+        if item_id:
+            sql += " AND f.item_id = ?"
+            final_params.append(item_id)
+        max_rows = max(limit * 5, limit + 100)
+        sql += " LIMIT ?"
+        final_params.append(max_rows)
+        cursor = conn.execute(sql, final_params)
+        columns = [c[0] for c in cursor.description] if getattr(cursor, "description", None) else None
+        batch = []
+        for row in _fetch_rows(cursor):
+            r = _row_to_dict(row, columns)
+            if not r.get("item_audio_url") and r.get("item_audio_url_fallback"):
+                r["item_audio_url"] = r["item_audio_url_fallback"]
+            batch.append(r)
+        return batch
+
+    # Primary search: full query in text or words JSON (plus no-space fallback)
+    results = _run_query(
+        "(LOWER(f.text) LIKE ? OR LOWER(COALESCE(f.words, '')) LIKE ? OR REPLACE(LOWER(f.text), ' ', '') LIKE ?)",
+        [f"%{query_norm}%", f"%{query_norm}%", f"%{query_norm.replace(' ', '')}%"],
+    )
+
+    # Secondary search: tokenized AND on text (broadens phrases split by punctuation)
+    if len(results) < limit and len(tokens) > 1:
+        token_where = " AND ".join(["LOWER(f.text) LIKE ?"] * len(tokens))
+        token_params = [f"%{t}%" for t in tokens]
+        results.extend(_run_query(token_where, token_params))
+
     conn.close()
-    return _dedupe_segments(results, tolerance_ms=50)[:limit]
+    results = _dedupe_segments(results, tolerance_ms=50)
+    return results[:limit]
 
 
 def _search_semantic(
@@ -290,7 +309,7 @@ def _search_semantic(
     Requires embeddings to be built (stemmy embeddings build).
     """
     try:
-        from stemmy_cli.embeddings.service import FragmentEmbedder
+        from stemmy_cli.embeddings.service import FragmentEmbedder, check_embedding_status
     except ImportError:
         return []  # Embeddings not available
     
@@ -299,6 +318,33 @@ def _search_semantic(
         return []
     
     embedder = FragmentEmbedder(provider=provider, db_path=db_path)
+
+    # Quick embedding availability check
+    status = check_embedding_status(db_path)
+    if status.get("embedded_count", 0) <= 0:
+        # Fallback to text search if no embeddings exist
+        return _search_fragments(query, limit=limit, format_id=format_id)
+
+    if format_id:
+        try:
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            cursor = conn.execute(
+                """
+                SELECT COUNT(*) FROM fragment_embeddings e
+                JOIN fragments f ON f.id = e.fragment_id
+                JOIN items i ON f.item_id = i.id
+                WHERE i.format_id = ?
+                """,
+                (format_id,),
+            )
+            fmt_count = cursor.fetchone()[0]
+            conn.close()
+        except Exception:
+            fmt_count = 0
+        if fmt_count <= 0:
+            # No embeddings for this podcast; fall back to text search within format
+            return _search_fragments(query, limit=limit, format_id=format_id)
     
     try:
         # Filter by format_id at embedding level (only compare within that podcast)
@@ -306,10 +352,11 @@ def _search_semantic(
             query, top_k=limit, format_id=format_id
         )
     except Exception:
-        return []
+        return _search_fragments(query, limit=limit, format_id=format_id)
     
     if not raw_results:
-        return []
+        # Fallback to text search (still filtered by format_id)
+        return _search_fragments(query, limit=limit, format_id=format_id)
     
     conn = _get_db_connection()
     
@@ -317,7 +364,7 @@ def _search_semantic(
     for r in raw_results:
         fid = r["fragment_id"]
         cursor = conn.execute("""
-            SELECT f.id, f.text, f.start_time, f.end_time, f.item_id, f.item_audio_url,
+            SELECT f.id, f.text, f.words, f.start_time, f.end_time, f.item_id, f.item_audio_url,
                    i.audio_url as item_audio_url_fallback, i.format_id
             FROM fragments f
             LEFT JOIN items i ON f.item_id = i.id
@@ -653,13 +700,16 @@ def _analyze_text(
         sql += " AND f.item_id = ?"
         params.append(item_id)
     
-    sql += f" LIMIT 500"
+    sql += " ORDER BY RANDOM()"
     
     cursor = conn.execute(sql, params)
     columns = [c[0] for c in cursor.description] if getattr(cursor, "description", None) else None
     results = []
     
+    target_results = limit * 3
     for row in _fetch_rows(cursor):
+        if len(results) >= target_results:
+            break
         try:
             row_dict = _row_to_dict(row, columns)
             words_data = json.loads(row_dict.get("words", "[]")) if row_dict.get("words") else []
