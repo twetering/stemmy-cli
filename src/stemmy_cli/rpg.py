@@ -6,6 +6,7 @@ Like a classic text adventure: you navigate through proven options.
 """
 
 import os
+import json
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -49,6 +50,7 @@ class RPGShell:
         self.selected_format: Optional[Dict] = None
         self.selected_fragments: List[Dict] = []
         self.last_output: Optional[str] = None
+        self.force_sentence_mode: bool = False
         
         # Available music files
         self.music_files = self._scan_music()
@@ -84,7 +86,7 @@ class RPGShell:
             return {}
         if name.startswith(("list_", "search_", "analyze_")):
             return []
-            return {"success": False, "error": "Tool execution failed"}
+        return {"success": False, "error": "Tool execution failed"}
 
     def _execute_tool_safe(self, name: str, **kwargs) -> Any:
         """Execute tool with error handling and logging."""
@@ -119,6 +121,305 @@ class RPGShell:
                 seen.append((audio_url, start_ms, end_ms))
                 unique.append(r)
         return unique
+
+    def _prompt_limit(self, default_limit: int, max_limit: int) -> int:
+        console.print(f"[cyan]Hoeveel resultaten?[/cyan] [dim](default: {default_limit}, max: {max_limit})[/dim]")
+        limit_str = self._prompt("Limit")
+        if limit_str.isdigit():
+            return min(int(limit_str), max_limit)
+        return default_limit
+
+    def _prompt_duration_filters(
+        self,
+        default_min: Optional[float] = None,
+        default_max: Optional[float] = None,
+    ) -> tuple:
+        console.print()
+        min_label = f"{default_min}s" if default_min is not None else "geen"
+        max_label = f"{default_max}s" if default_max is not None else "geen"
+        console.print(f"[cyan]Filter op duur?[/cyan] [dim](min: {min_label}, max: {max_label})[/dim]")
+        min_str = self._prompt("Min sec")
+        max_str = self._prompt("Max sec")
+        min_sec = float(min_str) if min_str.replace(".", "", 1).isdigit() else default_min
+        max_sec = float(max_str) if max_str.replace(".", "", 1).isdigit() else default_max
+        return min_sec, max_sec
+
+    def _prompt_sentence_mode(self) -> bool:
+        console.print()
+        console.print("[cyan]Zinnen forceren?[/cyan] [dim](default: nee)[/dim]")
+        return self._prompt("Zinnen") in ("j", "ja", "y", "yes")
+
+    def _filter_by_duration(
+        self,
+        results: List[Dict[str, Any]],
+        min_sec: Optional[float],
+        max_sec: Optional[float],
+    ) -> List[Dict[str, Any]]:
+        if min_sec is None and max_sec is None:
+            return results
+        filtered = []
+        for r in results:
+            try:
+                start = float(r.get("start_time", 0) or 0)
+                end = float(r.get("end_time", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            dur = end - start
+            if min_sec is not None and dur < min_sec:
+                continue
+            if max_sec is not None and dur > max_sec:
+                continue
+            filtered.append(r)
+        return filtered
+
+    def _extract_sentences_from_results(
+        self,
+        results: List[Dict[str, Any]],
+        min_sec: Optional[float],
+        max_sec: Optional[float],
+        force: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Explode fragment results into sentence-level segments using words."""
+        if not force and min_sec is None and max_sec is None:
+            return results
+        try:
+            from stemmy_cli.agent.tools import _split_sentences
+        except Exception:
+            return results
+        extracted = []
+        max_sent = max_sec if max_sec is not None else 60.0
+        min_sent = min_sec if min_sec is not None else 0.0
+        for r in results:
+            words_json = r.get("words")
+            if not words_json:
+                continue
+            try:
+                words = json.loads(words_json) if isinstance(words_json, str) else words_json
+            except (json.JSONDecodeError, TypeError):
+                continue
+            audio_url = r.get("item_audio_url") or r.get("audio_url") or r.get("source_audio_url")
+            for sent in _split_sentences(words, max_sentence_seconds=max_sent):
+                dur = sent.get("duration", 0)
+                if dur < min_sent:
+                    continue
+                if max_sec is not None and dur > max_sec:
+                    continue
+                extracted.append({
+                    "text": sent["text"],
+                    "start_time": sent["start_time"],
+                    "end_time": sent["end_time"],
+                    "item_audio_url": audio_url,
+                    "audio_url": audio_url,
+                    "fragment_id": r.get("id") or r.get("fragment_id"),
+                    "item_id": r.get("item_id"),
+                })
+        return extracted
+
+    def _apply_sentence_mode(
+        self,
+        results: List[Dict[str, Any]],
+        min_sec: Optional[float],
+        max_sec: Optional[float],
+        force: bool,
+    ) -> List[Dict[str, Any]]:
+        if not results:
+            return results
+        if not force and min_sec is None and max_sec is None:
+            return results
+        sentence_results = self._extract_sentences_from_results(
+            results,
+            min_sec,
+            max_sec,
+            force=force,
+        )
+        if sentence_results:
+            sentence_results = self._dedupe_results(sentence_results)
+            console.print(f"[dim]Zinnen gevonden: {len(sentence_results)}[/dim]")
+            return sentence_results
+        return self._filter_by_duration(results, min_sec, max_sec)
+
+    def _result_label(
+        self,
+        min_sec: Optional[float],
+        max_sec: Optional[float],
+        force_sent: bool,
+        default: str = "fragmenten",
+    ) -> str:
+        if force_sent or min_sec is not None or max_sec is not None:
+            return "resultaten"
+        return default
+
+    def _gather_word_segments(
+        self,
+        queries: List[str],
+        format_id: Optional[str],
+        limit_per_query: int,
+    ) -> List[Dict[str, Any]]:
+        """Search fragments for multiple queries and extract word timings."""
+        try:
+            from stemmy_cli.agent.tools import _extract_word_timings
+        except Exception:
+            _extract_word_timings = None
+        all_segments: List[Dict[str, Any]] = []
+        for q in queries:
+            segs = self._execute_tool_safe("search_fragments", query=q, format_id=format_id, limit=limit_per_query)
+            if not segs:
+                continue
+            if _extract_word_timings:
+                word_segs = _extract_word_timings(segs, q)
+                if word_segs:
+                    segs = word_segs
+            for seg in segs:
+                seg["source_query"] = q
+            all_segments.extend(segs)
+        return all_segments
+
+    def _sentence_matches_queries(self, text: str, queries: List[str]) -> bool:
+        """Check if sentence text matches any query (loose token match)."""
+        if not text:
+            return False
+        # Normalize text to alnum + spaces
+        normalized = "".join(c.lower() if c.isalnum() else " " for c in text)
+        normalized_no_space = normalized.replace(" ", "")
+        words = set(w for w in normalized.split() if w)
+        for q in queries:
+            q_norm = "".join(c.lower() if c.isalnum() or c.isspace() else " " for c in q).strip()
+            if not q_norm:
+                continue
+            q_tokens = [t for t in q_norm.split() if t]
+            if not q_tokens:
+                continue
+            if len(q_tokens) == 1:
+                if q_tokens[0] in words or q_tokens[0] in normalized or q_tokens[0] in normalized_no_space:
+                    return True
+            else:
+                if all(t in words for t in q_tokens):
+                    return True
+        return False
+
+    def _show_results_paged(self, results: List[Dict[str, Any]], mode: str):
+        page_size = 20
+        idx = 0
+        total = len(results)
+        while idx < total:
+            slice_end = min(idx + page_size, total)
+            table = Table(show_header=True, header_style="bold", box=None)
+            table.add_column("#", style="cyan", width=4)
+            if mode in ("questions", "exclamations"):
+                table.add_column("Zin", width=80)
+            else:
+                table.add_column("Tekst", width=80)
+            for i, r in enumerate(results[idx:slice_end], idx + 1):
+                text = r.get("text", r.get("sentence", ""))[:78]
+                if len(r.get("text", r.get("sentence", ""))) > 78:
+                    text += "..."
+                table.add_row(str(i), text)
+            console.print(table)
+            idx = slice_end
+            if idx >= total:
+                break
+            console.print("[dim]Enter = volgende pagina | q = stoppen | a = alles[/dim]")
+            choice = self._prompt("Meer").strip().lower()
+            if choice == "q":
+                break
+            if choice == "a":
+                page_size = total
+
+    def _select_music_for_compilation(self) -> Optional[Dict[str, Any]]:
+        console.print()
+        console.print("[cyan]Achtergrondmuziek?[/cyan]")
+        console.print("  [cyan]0[/cyan]  Geen muziek")
+        from stemmy_cli.paths import get_music_dir
+        music_dir = get_music_dir()
+        music_files = list(music_dir.glob("*.mp3")) if music_dir.exists() else []
+        for i, m in enumerate(music_files[:10], 1):
+            console.print(f"  [cyan]{i}[/cyan]  {m.name}")
+        choice = self._prompt("Nummer")
+        if choice == "0" or not choice:
+            return None
+        if not choice.isdigit() or not (1 <= int(choice) <= len(music_files)):
+            console.print("[yellow]Ongeldige keuze[/yellow]")
+            return None
+        music_path = str(music_files[int(choice) - 1])
+        console.print("[cyan]Muziek volume?[/cyan] [dim](default: 15%)[/dim]")
+        vol_str = self._prompt("Volume %")
+        volume = int(vol_str) if vol_str.isdigit() else 15
+        return {"music_path": music_path, "volume": volume / 100.0}
+
+    def _prompt_fx_preset(self) -> Optional[str]:
+        console.print()
+        console.print("[cyan]Special FX?[/cyan]")
+        console.print("  [cyan]0[/cyan]  Geen")
+        console.print("  [cyan]1[/cyan]  Radio (telefoon)")
+        console.print("  [cyan]2[/cyan]  Warm")
+        console.print("  [cyan]3[/cyan]  Bright")
+        choice = self._prompt("FX")
+        return choice if choice in ("1", "2", "3") else None
+
+    def _apply_fx_preset(self, input_path: str, choice: Optional[str]) -> str:
+        if not choice:
+            return input_path
+        console.print()
+        output_path = input_path.replace(".mp3", "_fx_tmp.mp3")
+        if choice == "1":
+            filter_str = "highpass=f=300,lowpass=f=3400,acompressor=threshold=-18dB:ratio=3:attack=5:release=50"
+        elif choice == "2":
+            filter_str = "acompressor=threshold=-20dB:ratio=2.5:attack=5:release=50,equalizer=f=120:width_type=o:width=2:g=2"
+        else:
+            filter_str = "equalizer=f=8000:width_type=o:width=2:g=3,acompressor=threshold=-18dB:ratio=2.5:attack=5:release=50"
+        import subprocess
+        cmd = ["ffmpeg", "-y", "-i", input_path, "-af", filter_str, "-c:a", "libmp3lame", "-q:a", "2", output_path]
+        subprocess.run(cmd, capture_output=True)
+        if Path(output_path).exists():
+            Path(output_path).replace(input_path)
+            return input_path
+        return input_path
+
+    def _interleave_segments(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Shuffle segments while avoiding consecutive items from the same source."""
+        import random
+        if not segments:
+            return segments
+        buckets: Dict[str, List[Dict[str, Any]]] = {}
+        for seg in segments:
+            key = (
+                seg.get("item_id")
+                or seg.get("audio_url")
+                or seg.get("item_audio_url")
+                or seg.get("source_audio_url")
+                or "unknown"
+            )
+            buckets.setdefault(str(key), []).append(seg)
+        # Shuffle within each bucket
+        for k in buckets:
+            random.shuffle(buckets[k])
+        keys = list(buckets.keys())
+        random.shuffle(keys)
+        output: List[Dict[str, Any]] = []
+        while keys:
+            next_keys = []
+            for k in keys:
+                bucket = buckets.get(k)
+                if not bucket:
+                    continue
+                output.append(bucket.pop())
+                if bucket:
+                    next_keys.append(k)
+            keys = next_keys
+            random.shuffle(keys)
+        return output
+
+    def _concat_audio_files(self, file_list: Path, output_path: str) -> None:
+        """Concatenate audio files with re-encode to avoid timestamp gaps."""
+        import subprocess
+        cmd = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", str(file_list),
+            "-af", "aresample=async=1:first_pts=0",
+            "-c:a", "libmp3lame", "-q:a", "2",
+            output_path,
+        ]
+        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
     
     def _scan_music(self) -> List[Path]:
         """Find available background music in static/music/."""
@@ -141,6 +442,8 @@ class RPGShell:
         format_id: Optional[str] = None,
         limit_per_query: int = 10,
         output_path: Optional[str] = None,
+        min_sec: Optional[float] = None,
+        max_sec: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Create compilation with step-by-step progress display."""
         from stemmy_cli.agent.tools import (
@@ -149,7 +452,6 @@ class RPGShell:
         from stemmy_cli.audio.local_extract import extract_segments_local
         import subprocess
         import tempfile
-        import random
         
         console.print()
         
@@ -190,14 +492,15 @@ class RPGShell:
                     seg["source_query"] = query
                 all_segments.extend(segs)
             
+            all_segments = self._filter_by_duration(all_segments, min_sec, max_sec)
             progress.update(task, completed=30, detail=f"{len(all_segments)} gevonden")
             
             if not all_segments:
                 progress.update(task, description="[red]✗ Geen resultaten[/red]", completed=100, detail="")
                 return {"success": False, "error": "No matches found"}
             
-            # Shuffle
-            random.shuffle(all_segments)
+            # Shuffle without repeating same source too much
+            all_segments = self._interleave_segments(all_segments)
             
             # Step 2: Extract audio (50%)
             progress.update(task, description="🎵 Audio extracten (parallel)", completed=35, detail=f"0/{len(all_segments)}")
@@ -253,13 +556,8 @@ class RPGShell:
                 query_tag = "_".join("".join(c if c.isalnum() else "_" for c in q[:10]) for q in queries[:3])
                 output_path = str(output_dir / f"shuffled_{query_tag}.mp3")
             
-            concat_cmd = [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                "-i", str(file_list), "-c", "copy", output_path
-            ]
-            
             try:
-                subprocess.run(concat_cmd, capture_output=True, timeout=60)
+                self._concat_audio_files(file_list, output_path)
             except Exception as e:
                 progress.update(task, description="[red]✗ Samenvoegen mislukt[/red]", completed=100, detail="")
                 return {"success": False, "error": str(e)}
@@ -412,53 +710,67 @@ class RPGShell:
         
         # Step 4: Limit
         console.print()
-        console.print("[cyan]Stap 3:[/cyan] Hoeveel per woord? [dim](default: 10)[/dim]")
-        limit_str = self._prompt("Limit")
-        limit = int(limit_str) if limit_str.isdigit() else 10
-        
-        # Step 5: Output filename
+        console.print("[cyan]Stap 3:[/cyan] Hoeveel per woord?[/cyan]")
+        limit = self._prompt_limit(default_limit=100, max_limit=1000)
+
+        min_sec, max_sec = self._prompt_duration_filters(default_min=None, default_max=None)
+        force_sent = self._prompt_sentence_mode()
+
         console.print()
-        safe_queries = ["".join(c if c.isalnum() or c in "_ " else "" for c in q) for q in queries[:2]]
-        default_name = f"compilatie_{'_'.join(safe_queries)}.mp3"
-        console.print(f"[cyan]Stap 4:[/cyan] Bestandsnaam? [dim](default: {default_name})[/dim]")
-        filename = self._prompt("Bestand")
-        filename = filename if filename else default_name
-        if not filename.endswith(".mp3"):
-            filename += ".mp3"
-        
-        # Full output path in output/ directory
-        output_path = str(self._get_output_dir() / filename)
-        
-        # Execute with progress
-        result = self._create_compilation_with_progress(
-            queries=queries,
-            compilation_type="word",
-            use_word_timing=True,
-            format_id=format_id,
-            limit_per_query=limit,
-            output_path=output_path
-        )
-        
-        if result.get("success"):
-            # Use actual output path from result
-            actual_path = result.get("output_path", output_path)
-            self.last_output = actual_path
-            segments = result.get("segments_used", result.get("total_segments", 0))
-            console.print()
-            console.print(Panel.fit(
-                f"[green]✓ Klaar![/green]\n\n"
-                f"📁 {actual_path}\n"
-                f"🎵 {segments} clips",
-                border_style="green"
-            ))
-            
-            # Offer to add music
-            console.print()
-            console.print("Wil je muziek toevoegen? [cyan]j[/cyan]/n")
-            if self._prompt("Muziek") in ("j", "ja", "y", "yes", ""):
-                self._add_music_to_file(actual_path)
+        console.print("[dim]Zoeken...[/dim]")
+        if force_sent or min_sec is not None or max_sec is not None:
+            # Sentence-level matches containing the query terms
+            all_frags: List[Dict[str, Any]] = []
+            for q in queries:
+                segs = self._execute_tool_safe("search_fragments", query=q, format_id=format_id, limit=limit)
+                for seg in segs:
+                    seg["source_query"] = q
+                all_frags.extend(segs)
+            if not all_frags:
+                console.print("[yellow]Geen resultaten gevonden[/yellow]")
+                return
+            all_frags = self._dedupe_results(all_frags)
+            results = self._apply_sentence_mode(all_frags, min_sec, max_sec, force=True)
+            results = [r for r in results if self._sentence_matches_queries(r.get("text", ""), queries)]
         else:
-            console.print(f"[red]Error: {result.get('error', 'Unknown')}[/red]")
+            results = self._gather_word_segments(queries, format_id, limit)
+
+        if not results:
+            console.print("[yellow]Geen resultaten gevonden[/yellow]")
+            return
+
+        results = self._dedupe_results(results)
+
+        console.print()
+        label = self._result_label(min_sec, max_sec, force_sent, default="matches")
+        console.print(f"[green]Gevonden: {len(results)} {label}[/green]")
+        console.print()
+
+        table = Table(show_header=True, header_style="bold", box=None)
+        table.add_column("#", style="cyan", width=3)
+        table.add_column("Woord", width=20)
+        table.add_column("Context", width=40)
+        for i, r in enumerate(results[:15], 1):
+            word = r.get("text", r.get("word", ""))[:18]
+            context = r.get("context", r.get("fragment_text", r.get("text", "")))[:38]
+            if len(r.get("context", r.get("fragment_text", r.get("text", "")))) > 38:
+                context += "..."
+            table.add_row(str(i), word, context)
+        console.print(table)
+
+        if len(results) > 15:
+            console.print(f"[dim]+{len(results) - 15} meer...[/dim]")
+
+        self.selected_fragments = results
+        console.print()
+        console.print("[cyan]Volledige lijst tonen?[/cyan] j/n")
+        if self._prompt("Lijst") in ("j", "ja", "y", "yes"):
+            self._show_results_paged(results, mode="word")
+
+        console.print()
+        console.print("Wil je hiervan een compilatie maken? [cyan]j[/cyan]/n")
+        if self._prompt("Compilatie") in ("j", "ja", "y", "yes"):
+            self._make_compilation_from_results(results, mode="word", pattern=",".join(queries))
     
     def _fragment_compilation(self):
         """Fragment-level compilation."""
@@ -473,49 +785,31 @@ class RPGShell:
         format_id = self._select_format_optional()
         
         console.print()
-        console.print("[cyan]Stap 3:[/cyan] Hoeveel fragmenten? [dim](default: 10)[/dim]")
-        limit_str = self._prompt("Limit")
-        limit = int(limit_str) if limit_str.isdigit() else 10
+        console.print("[cyan]Stap 3:[/cyan] Hoeveel fragmenten? [dim](default: 100, max: 1000)[/dim]")
+        limit = self._prompt_limit(default_limit=100, max_limit=1000)
+        
+        min_sec, max_sec = self._prompt_duration_filters()
+        force_sent = self._prompt_sentence_mode()
         
         console.print()
-        safe_query = "".join(c if c.isalnum() or c in "_ " else "" for c in query[:20])
-        default_name = f"fragmenten_{safe_query.replace(' ', '_')}.mp3"
-        console.print(f"[cyan]Stap 4:[/cyan] Bestandsnaam? [dim](default: {default_name})[/dim]")
-        filename = self._prompt("Bestand")
-        filename = filename if filename else default_name
-        if not filename.endswith(".mp3"):
-            filename += ".mp3"
+        console.print("[dim]Zoeken...[/dim]")
         
-        # Full output path
-        output_path = str(self._get_output_dir() / filename)
+        results = self._execute_tool_safe("search_fragments", query=query, format_id=format_id, limit=limit)
+        if not results:
+            console.print("[yellow]Geen resultaten gevonden[/yellow]")
+            return
+        results = self._dedupe_results(results)
+        results = self._apply_sentence_mode(results, min_sec, max_sec, force_sent)
         
         console.print()
-        console.print("[dim]Bezig met maken...[/dim]")
+        label = self._result_label(min_sec, max_sec, force_sent)
+        console.print(f"[green]Gevonden: {len(results)} {label}[/green]")
+        console.print()
+        console.print("[cyan]Volledige lijst tonen?[/cyan] j/n")
+        if self._prompt("Lijst") in ("j", "ja", "y", "yes"):
+            self._show_results_paged(results, mode="fragment")
         
-        result = self._execute_tool_safe(
-            "create_compilation",
-            query=query,
-            compilation_type="fragment",
-            format_id=format_id,
-            limit=limit,
-            output_path=output_path
-        )
-        
-        if result.get("success"):
-            actual_path = result.get("output_path", output_path)
-            self.last_output = actual_path
-            console.print()
-            console.print(Panel.fit(
-                f"[green]✓ Klaar![/green]\n\n📁 {actual_path}\n🎵 {result.get('segments_used', 0)} fragmenten",
-                border_style="green"
-            ))
-            
-            console.print()
-            console.print("Wil je muziek toevoegen? [cyan]j[/cyan]/n")
-            if self._prompt("Muziek") in ("j", "ja", "y", "yes", ""):
-                self._add_music_to_file(actual_path)
-        else:
-            console.print(f"[red]Error: {result.get('error', 'Unknown')}[/red]")
+        self._make_compilation_from_results(results, mode="fragment", pattern=query)
     
     def _entity_compilation(self):
         """Entity-based compilation."""
@@ -549,42 +843,28 @@ class RPGShell:
         limit_str = self._prompt("Limit")
         limit = int(limit_str) if limit_str.isdigit() else 20
         
-        console.print()
-        default_name = f"entities_{entity_type or 'all'}.mp3"
-        console.print(f"[cyan]Stap 4:[/cyan] Bestandsnaam? [dim](default: {default_name})[/dim]")
-        filename = self._prompt("Bestand")
-        filename = filename if filename else default_name
-        if not filename.endswith(".mp3"):
-            filename += ".mp3"
-        
-        # Full output path
-        output_path = str(self._get_output_dir() / filename)
+        min_sec, max_sec = self._prompt_duration_filters(default_min=0.3, default_max=3.0)
+        force_sent = True if mode in ("questions", "exclamations") else self._prompt_sentence_mode()
         
         console.print()
-        console.print("[dim]Bezig met maken...[/dim]")
+        console.print("[dim]Zoeken...[/dim]")
         
-        # Use shuffled compilation with entity search
-        result = self._execute_tool_safe(
-            "create_shuffled_compilation",
-            queries=[entity_type] if entity_type else ["person_name", "organization"],
-            compilation_type="word",
-            use_word_timing=True,
-            entity_type=entity_type,
-            format_id=format_id,
-            limit_per_query=limit,
-            output_path=output_path
-        )
+        results = self._execute_tool_safe("search_entities", query="", entity_type=entity_type, format_id=format_id, limit=limit)
+        if not results:
+            console.print("[yellow]Geen resultaten gevonden[/yellow]")
+            return
+        results = self._dedupe_results(results)
+        results = self._apply_sentence_mode(results, min_sec, max_sec, force_sent)
         
-        if result.get("success"):
-            actual_path = result.get("output_path", output_path)
-            self.last_output = actual_path
-            console.print()
-            console.print(Panel.fit(
-                f"[green]✓ Klaar![/green]\n\n📁 {actual_path}\n🎵 {result.get('segments_used', 0)} entities",
-                border_style="green"
-            ))
-        else:
-            console.print(f"[red]Error: {result.get('error', 'Unknown')}[/red]")
+        console.print()
+        label = self._result_label(min_sec, max_sec, force_sent, default="entities")
+        console.print(f"[green]Gevonden: {len(results)} {label}[/green]")
+        console.print()
+        console.print("[cyan]Volledige lijst tonen?[/cyan] j/n")
+        if self._prompt("Lijst") in ("j", "ja", "y", "yes"):
+            self._show_results_paged(results, mode="entities")
+        
+        self._make_compilation_from_results(results, mode="entities", pattern=entity_type or "all")
     
     def _semantic_compilation(self):
         """Semantic search compilation - find by meaning, not exact words."""
@@ -600,49 +880,32 @@ class RPGShell:
         format_id = self._select_format_optional()
         
         console.print()
-        console.print("[cyan]Stap 3:[/cyan] Hoeveel fragmenten? [dim](default: 15)[/dim]")
-        limit_str = self._prompt("Limit")
-        limit = int(limit_str) if limit_str.isdigit() else 15
+        console.print("[cyan]Stap 3:[/cyan] Hoeveel fragmenten? [dim](default: 100, max: 1000)[/dim]")
+        limit = self._prompt_limit(default_limit=100, max_limit=1000)
+        
+        min_sec, max_sec = self._prompt_duration_filters()
+        force_sent = self._prompt_sentence_mode()
         
         console.print()
-        safe_query = "".join(c if c.isalnum() or c in "_ " else "_" for c in query[:25])
-        default_name = f"semantic_{safe_query.replace(' ', '_')}.mp3"
-        console.print(f"[cyan]Stap 4:[/cyan] Bestandsnaam? [dim](default: {default_name})[/dim]")
-        filename = self._prompt("Bestand")
-        filename = filename if filename else default_name
-        if not filename.endswith(".mp3"):
-            filename += ".mp3"
+        console.print("[dim]Semantisch zoeken...[/dim]")
         
-        output_path = str(self._get_output_dir() / filename)
-        
-        console.print()
-        console.print("[dim]Bezig met semantisch zoeken en compilatie...[/dim]")
-        
-        result = self._execute_tool_safe(
-            "create_compilation",
-            query=query,
-            compilation_type="fragment",
-            search_mode="semantic",
-            format_id=format_id,
-            limit=limit,
-            output_path=output_path
-        )
-        
-        if result.get("success"):
-            actual_path = result.get("output_path", output_path)
-            self.last_output = actual_path
-            console.print()
-            console.print(Panel.fit(
-                f"[green]✓ Klaar![/green]\n\n📁 {actual_path}\n🎵 {result.get('segments_used', 0)} fragmenten",
-                border_style="green"
-            ))
-            console.print()
-            console.print("Wil je muziek toevoegen? [cyan]j[/cyan]/n")
-            if self._prompt("Muziek") in ("j", "ja", "y", "yes", ""):
-                self._add_music_to_file(actual_path)
-        else:
-            console.print(f"[red]Error: {result.get('error', 'Unknown')}[/red]")
+        results = self._execute_tool_safe("search_semantic", query=query, format_id=format_id, limit=limit)
+        if not results:
+            console.print("[yellow]Geen resultaten gevonden[/yellow]")
             console.print("[dim]Tip: Run 'stemmy embeddings build' als embeddings nog niet bestaan[/dim]")
+            return
+        results = self._dedupe_results(results)
+        results = self._apply_sentence_mode(results, min_sec, max_sec, force_sent)
+        
+        console.print()
+        label = self._result_label(min_sec, max_sec, force_sent)
+        console.print(f"[green]Gevonden: {len(results)} {label}[/green]")
+        console.print()
+        console.print("[cyan]Volledige lijst tonen?[/cyan] j/n")
+        if self._prompt("Lijst") in ("j", "ja", "y", "yes"):
+            self._show_results_paged(results, mode="semantic")
+        
+        self._make_compilation_from_results(results, mode="semantic", pattern=query)
     
     def _hybrid_compilation(self):
         """Hybrid: semantic + keyword search combined."""
@@ -658,48 +921,31 @@ class RPGShell:
         format_id = self._select_format_optional()
         
         console.print()
-        console.print("[cyan]Stap 3:[/cyan] Hoeveel fragmenten? [dim](default: 15)[/dim]")
-        limit_str = self._prompt("Limit")
-        limit = int(limit_str) if limit_str.isdigit() else 15
+        console.print("[cyan]Stap 3:[/cyan] Hoeveel fragmenten? [dim](default: 100, max: 1000)[/dim]")
+        limit = self._prompt_limit(default_limit=100, max_limit=1000)
+        
+        min_sec, max_sec = self._prompt_duration_filters()
+        force_sent = self._prompt_sentence_mode()
         
         console.print()
-        safe_query = "".join(c if c.isalnum() or c in "_ " else "_" for c in query[:25])
-        default_name = f"hybrid_{safe_query.replace(' ', '_')}.mp3"
-        console.print(f"[cyan]Stap 4:[/cyan] Bestandsnaam? [dim](default: {default_name})[/dim]")
-        filename = self._prompt("Bestand")
-        filename = filename if filename else default_name
-        if not filename.endswith(".mp3"):
-            filename += ".mp3"
+        console.print("[dim]Hybrid zoeken...[/dim]")
         
-        output_path = str(self._get_output_dir() / filename)
+        results = self._execute_tool_safe("search_hybrid", query=query, format_id=format_id, limit=limit)
+        if not results:
+            console.print("[yellow]Geen resultaten gevonden[/yellow]")
+            return
+        results = self._dedupe_results(results)
+        results = self._apply_sentence_mode(results, min_sec, max_sec, force_sent)
         
         console.print()
-        console.print("[dim]Bezig met hybrid zoeken en compilatie...[/dim]")
+        label = self._result_label(min_sec, max_sec, force_sent)
+        console.print(f"[green]Gevonden: {len(results)} {label}[/green]")
+        console.print()
+        console.print("[cyan]Volledige lijst tonen?[/cyan] j/n")
+        if self._prompt("Lijst") in ("j", "ja", "y", "yes"):
+            self._show_results_paged(results, mode="hybrid")
         
-        result = self._execute_tool_safe(
-            "create_compilation",
-            query=query,
-            compilation_type="fragment",
-            search_mode="hybrid",
-            format_id=format_id,
-            limit=limit,
-            output_path=output_path
-        )
-        
-        if result.get("success"):
-            actual_path = result.get("output_path", output_path)
-            self.last_output = actual_path
-            console.print()
-            console.print(Panel.fit(
-                f"[green]✓ Klaar![/green]\n\n📁 {actual_path}\n🎵 {result.get('segments_used', 0)} fragmenten",
-                border_style="green"
-            ))
-            console.print()
-            console.print("Wil je muziek toevoegen? [cyan]j[/cyan]/n")
-            if self._prompt("Muziek") in ("j", "ja", "y", "yes", ""):
-                self._add_music_to_file(actual_path)
-        else:
-            console.print(f"[red]Error: {result.get('error', 'Unknown')}[/red]")
+        self._make_compilation_from_results(results, mode="hybrid", pattern=query)
     
     def _select_format_optional(self) -> Optional[str]:
         """Let user optionally select a format."""
@@ -755,14 +1001,9 @@ class RPGShell:
         format_id = self._select_format_optional()
         
         console.print()
-        max_limit = 500
-        default_limit = 50
-        console.print(f"[cyan]Hoeveel resultaten?[/cyan] [dim](default: {default_limit}, max: {max_limit})[/dim]")
-        limit_str = self._prompt("Limit")
-        if limit_str.isdigit():
-            limit = min(int(limit_str), max_limit)
-        else:
-            limit = default_limit
+        limit = self._prompt_limit(default_limit=100, max_limit=1000)
+        min_sec, max_sec = self._prompt_duration_filters()
+        force_sent = self._prompt_sentence_mode()
         
         console.print()
         console.print("[dim]Zoeken...[/dim]")
@@ -777,9 +1018,11 @@ class RPGShell:
             return
         
         results = self._dedupe_results(results)
+        results = self._apply_sentence_mode(results, min_sec, max_sec, force_sent)
         
         console.print()
-        console.print(f"[green]Gevonden: {len(results)} fragmenten[/green]")
+        label = self._result_label(min_sec, max_sec, force_sent)
+        console.print(f"[green]Gevonden: {len(results)} {label}[/green]")
         console.print()
         
         table = Table(show_header=True, header_style="bold", box=None)
@@ -804,6 +1047,10 @@ class RPGShell:
             console.print(f"[dim]+{len(results) - 10} meer...[/dim]")
         
         self.selected_fragments = results
+        console.print()
+        console.print("[cyan]Volledige lijst tonen?[/cyan] j/n")
+        if self._prompt("Lijst") in ("j", "ja", "y", "yes"):
+            self._show_results_paged(results, mode="search")
         
         # Offer to make compilation from results
         if results:
@@ -879,14 +1126,10 @@ class RPGShell:
 
         # Result limit
         console.print()
-        max_limit = 500
-        default_limit = 30 if mode not in ("questions", "exclamations") else 200
-        console.print(f"[cyan]Hoeveel resultaten?[/cyan] [dim](default: {default_limit}, max: {max_limit})[/dim]")
-        limit_str = self._prompt("Limit")
-        if limit_str.isdigit():
-            limit = min(int(limit_str), max_limit)
-        else:
-            limit = default_limit
+        default_limit = 100 if mode not in ("questions", "exclamations") else 300
+        limit = self._prompt_limit(default_limit=default_limit, max_limit=1000)
+        min_sec, max_sec = self._prompt_duration_filters(default_min=0.3, default_max=3.0)
+        force_sent = self._prompt_sentence_mode()
         
         console.print()
         console.print("[dim]Zoeken...[/dim]")
@@ -911,9 +1154,11 @@ class RPGShell:
             return
         
         results = self._dedupe_results(results)
+        results = self._apply_sentence_mode(results, min_sec, max_sec, force_sent)
         
         console.print()
-        console.print(f"[green]Gevonden: {len(results)} matches[/green]")
+        label = self._result_label(min_sec, max_sec, force_sent, default="matches")
+        console.print(f"[green]Gevonden: {len(results)} {label}[/green]")
         console.print()
         
         # Display results based on type
@@ -943,6 +1188,10 @@ class RPGShell:
             console.print(f"[dim]+{len(results) - 15} meer...[/dim]")
         
         self.selected_fragments = results
+        console.print()
+        console.print("[cyan]Volledige lijst tonen?[/cyan] j/n")
+        if self._prompt("Lijst") in ("j", "ja", "y", "yes"):
+            self._show_results_paged(results, mode=mode)
         
         # Offer to make compilation
         console.print()
@@ -964,28 +1213,29 @@ class RPGShell:
         format_id = self._select_format_optional()
         
         console.print()
-        max_limit = 500
-        default_limit = 50
-        console.print(f"[cyan]Hoeveel resultaten?[/cyan] [dim](default: {default_limit}, max: {max_limit})[/dim]")
-        limit_str = self._prompt("Limit")
-        if limit_str.isdigit():
-            limit = min(int(limit_str), max_limit)
-        else:
-            limit = default_limit
+        limit = self._prompt_limit(default_limit=100, max_limit=1000)
+        min_sec, max_sec = self._prompt_duration_filters()
+        force_sent = self._prompt_sentence_mode()
         
         console.print()
         console.print("[dim]Semantisch zoeken...[/dim]")
         results = self._execute_tool_safe("search_semantic", query=query, format_id=format_id, limit=limit)
         
         if not results:
-            console.print("[yellow]Geen resultaten gevonden[/yellow]")
-            console.print("[dim]Tip: Run 'stemmy embeddings build' als embeddings nog niet bestaan[/dim]")
-            return
+            console.print("[yellow]Geen resultaten gevonden (semantisch).[/yellow]")
+            console.print("[dim]Fallback: probeer hybride zoeken...[/dim]")
+            results = self._execute_tool_safe("search_hybrid", query=query, format_id=format_id, limit=limit)
+            if not results:
+                console.print("[yellow]Ook hybride gaf niets op.[/yellow]")
+                console.print("[dim]Tip: Run 'stemmy embeddings build' als embeddings nog niet bestaan[/dim]")
+                return
         
         results = self._dedupe_results(results)
+        results = self._apply_sentence_mode(results, min_sec, max_sec, force_sent)
         
         console.print()
-        console.print(f"[green]Gevonden: {len(results)} fragmenten[/green]")
+        label = self._result_label(min_sec, max_sec, force_sent)
+        console.print(f"[green]Gevonden: {len(results)} {label}[/green]")
         console.print()
         
         table = Table(show_header=True, header_style="bold", box=None)
@@ -1006,6 +1256,10 @@ class RPGShell:
             console.print(f"[dim]+{len(results) - 15} meer...[/dim]")
         
         self.selected_fragments = results
+        console.print()
+        console.print("[cyan]Volledige lijst tonen?[/cyan] j/n")
+        if self._prompt("Lijst") in ("j", "ja", "y", "yes"):
+            self._show_results_paged(results, mode="semantic")
         
         console.print()
         console.print("Wil je hiervan een compilatie maken? [cyan]j[/cyan]/n")
@@ -1042,38 +1296,103 @@ class RPGShell:
             filename += ".mp3"
         
         output_path = str(self._get_output_dir() / filename)
-        
-        # Extract segments from results
-        segments_to_use = results[:limit]
-        
-        # Use progress-based compilation
-        result = self._create_compilation_from_segments(segments_to_use, output_path)
-        
-        if result.get("success"):
-            actual_path = result.get("output_path", output_path)
-            self.last_output = actual_path
-            console.print()
-            console.print(Panel.fit(
-                f"[green]✓ Klaar![/green]\n\n"
-                f"📁 {actual_path}\n"
-                f"🎵 {result.get('segments_used', 0)} clips",
-                border_style="green"
-            ))
-            
-            console.print()
-            console.print("Wil je muziek toevoegen? [cyan]j[/cyan]/n")
-            if self._prompt("Muziek") in ("j", "ja", "y", "yes", ""):
-                self._add_music_to_file(actual_path)
+
+        # Pre-select music/FX and optional layering
+        music_choice = self._select_music_for_compilation()
+        fx_choice = self._prompt_fx_preset()
+        console.print()
+        console.print("Wil je een laag onder vanuit dezelfde batch? [cyan]j[/cyan]/n")
+        use_layer = self._prompt("Laag") in ("j", "ja", "y", "yes")
+
+        # Interleave to avoid same-source streaks
+        segments_to_use = self._interleave_segments(results)[:limit]
+        if use_layer and len(segments_to_use) < 2:
+            use_layer = False
+
+        actual_path = output_path
+        segments_used = 0
+
+        if use_layer:
+            primary_segments = segments_to_use[::2]
+            secondary_segments = segments_to_use[1::2]
+            tmp_primary = output_path.replace(".mp3", "_layer1.mp3")
+            tmp_secondary = output_path.replace(".mp3", "_layer2.mp3")
+
+            res1 = self._create_compilation_from_segments(primary_segments, tmp_primary)
+            if not res1.get("success"):
+                console.print(f"[red]Error: {res1.get('error', 'Unknown')}[/red]")
+                return
+            res2 = self._create_compilation_from_segments(secondary_segments, tmp_secondary)
+            if not res2.get("success"):
+                console.print(f"[red]Error: {res2.get('error', 'Unknown')}[/red]")
+                return
+
+            mix_res = self._execute_tool_safe(
+                "layer_audio_tracks",
+                tracks=[tmp_primary, tmp_secondary],
+                output_path=output_path,
+                normalize=True,
+            )
+            if not mix_res.get("success"):
+                console.print(f"[red]Duo-mix fout: {mix_res.get('error', 'Unknown')}[/red]")
+                return
+            segments_used = res1.get("segments_used", 0) + res2.get("segments_used", 0)
+
+            # Cleanup temp layer files
+            try:
+                Path(tmp_primary).unlink(missing_ok=True)
+                Path(tmp_secondary).unlink(missing_ok=True)
+            except Exception:
+                pass
         else:
-            console.print(f"[red]Error: {result.get('error', 'Unknown')}[/red]")
-    
+            result = self._create_compilation_from_segments(segments_to_use, output_path)
+            if not result.get("success"):
+                console.print(f"[red]Error: {result.get('error', 'Unknown')}[/red]")
+                return
+            actual_path = result.get("output_path", output_path)
+            segments_used = result.get("segments_used", 0)
+
+        # Mix with music if chosen
+        if music_choice:
+            mixed_output = actual_path.replace(".mp3", "_with_music.mp3")
+            old_path = actual_path
+            mix_result = self._execute_tool_safe(
+                "mix_with_background_music",
+                voice_track=actual_path,
+                music_track=music_choice["music_path"],
+                output_path=mixed_output,
+                music_volume=music_choice["volume"],
+                music_fade_in=2.0,
+                music_fade_out=3.0,
+                music_lead_in=1.5,
+                music_lead_out=2.0,
+            )
+            if mix_result.get("success"):
+                actual_path = mix_result.get("output_path", mixed_output)
+                if old_path != actual_path:
+                    try:
+                        Path(old_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+        # Optional FX
+        actual_path = self._apply_fx_preset(actual_path, fx_choice)
+
+        self.last_output = actual_path
+        console.print()
+        console.print(Panel.fit(
+            f"[green]✓ Klaar![/green]\n\n"
+            f"📁 {actual_path}\n"
+            f"🎵 {segments_used} clips",
+            border_style="green"
+        ))
+
     def _create_compilation_from_segments(
         self,
         segments: List[Dict],
         output_path: str,
     ) -> Dict[str, Any]:
         """Create compilation from pre-selected segments with progress."""
-        import subprocess
         import tempfile
         
         console.print()
@@ -1093,12 +1412,14 @@ class RPGShell:
             temp_dir.mkdir(exist_ok=True)
             
             # Extract audio using parallel extractor
-            total_to_process = min(len(segments), 50)
+            ordered_segments = self._interleave_segments(segments)
+            max_segments = 200
+            total_to_process = min(len(ordered_segments), max_segments)
             progress.update(task, description="🎵 Audio extracten (parallel)", completed=10, detail=f"0 van {total_to_process}")
             
             # Prepare segments for parallel extraction
             segments_to_extract = []
-            for i, seg in enumerate(segments[:50]):
+            for i, seg in enumerate(ordered_segments[:max_segments]):
                 audio_url = (
                     seg.get("audio_url") or 
                     seg.get("item_audio_url") or 
@@ -1148,13 +1469,8 @@ class RPGShell:
                 for seg_path in extract_results:
                     f.write(f"file '{seg_path}'\n")
             
-            concat_cmd = [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                "-i", str(file_list), "-c", "copy", output_path
-            ]
-            
             try:
-                subprocess.run(concat_cmd, capture_output=True, timeout=60)
+                self._concat_audio_files(file_list, output_path)
             except Exception as e:
                 return {"success": False, "error": str(e)}
             

@@ -124,3 +124,30 @@ Traceback (most recent call last):
     for row in cursor:
 TypeError: 'builtins.Cursor' object is not iterable
 
+[2026-03-10T22:23:45.066198] Tool 'list_formats' failed
+ValueError('dictionary update sequence element #0 has length 30; 2 is required')
+Traceback (most recent call last):
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/rpg.py", line 93, in _execute_tool_safe
+    from stemmy_cli.agent.tools import execute_tool
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 1926, in execute_tool
+    "start_time": {"type": "number", "description": "Start time in seconds", "required": True},
+    ^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 259, in _list_formats
+    """
+        
+ValueError: dictionary update sequence element #0 has length 30; 2 is required
+
+[2026-03-10T22:40:14.842648] Tool 'analyze_lexical' failed
+TypeError("'builtins.Cursor' object is not iterable")
+Traceback (most recent call last):
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/rpg.py", line 93, in _execute_tool_safe
+    from stemmy_cli.agent.tools import execute_tool
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 1926, in execute_tool
+    "start_time": {"type": "number", "description": "Start time in seconds", "required": True},
+    ^^^^^^^^^^^^^^^^^
+  File "/Users/tom/projects/stemmy_cli/src/stemmy_cli/agent/tools.py", line 334, in _analyze_lexical
+    results.append(d)
+TypeError: 'builtins.Cursor' object is not iterable
+
