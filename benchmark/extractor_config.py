@@ -18,7 +18,7 @@ class ExtractorConfig:
     # Concurrency
     # -------------------------------------------------------------------------
     # Aantal parallelle download/extract threads (1–16)
-    max_workers: int = 4
+    max_workers: int = 10
 
     # Executor strategie: "thread" = ThreadPoolExecutor (standaard, laag overhead)
     # "process" = ProcessPoolExecutor (nuttig bij CPU-gebonden FFmpeg, hogere overhead)
@@ -51,7 +51,7 @@ class ExtractorConfig:
     max_group_span: float = 30.0
 
     # Max aantal segmenten per downloadgroep
-    max_group_size: int = 5
+    max_group_size: int = 8
 
     # Sorteer segmenten op start_time binnen een URL vóór groepering
     sort_before_grouping: bool = True
@@ -60,10 +60,10 @@ class ExtractorConfig:
     # Audio buffers
     # -------------------------------------------------------------------------
     # Seconden buffer vóór het eerste segment in een groep (min 0.5)
-    buffer_before: float = 3.0
+    buffer_before: float = 1.0
 
     # Seconden buffer ná het laatste segment in een groep (max 3.0)
-    buffer_after: float = 1.0
+    buffer_after: float = 0.5
 
     # -------------------------------------------------------------------------
     # FFmpeg parameters
@@ -75,7 +75,7 @@ class ExtractorConfig:
     ffmpeg_vbr_quality: int = 2
 
     # Fade-in/fade-out duur in seconden (0 = geen fade, ~15% sneller)
-    ffmpeg_fade_duration: float = 0.015
+    ffmpeg_fade_duration: float = 0.0
 
     # Voer FFmpeg-aanroepen binnen een groep parallel uit
     # (elk segment in eigen subprocess tegelijk)
