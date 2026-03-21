@@ -1,0 +1,9 @@
+# Tijdelijke bestanden
+.worktrees/
+results/experiments/
+*.pyc
+__pycache__/
+
+# Fixture-hashes worden wél gecommit (integriteitscheck)
+# results/fixtures/ wordt wél gecommit
+# BASELINE_SCORE wordt wél gecommit
