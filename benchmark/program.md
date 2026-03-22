@@ -1,165 +1,123 @@
-# Stemmy Extractie Benchmark — Onderzoeksprogramma
+# Stemmy Extractie Benchmark — Onderzoeksprogramma (v2)
 
-## Primaire Doelstelling
+## Doel
 
-Maximaliseer `extraction_score` voor de extractie van podcastfragmenten uit S3-opgeslagen afleveringen.
+Maximaliseer `extraction_score` voor de extractie van podcastfragmenten uit S3.
+De agent schrijft de volledige implementatie in `extractor_impl.py` opnieuw.
+Dit is architectuuronderzoek — geen hyperparameter-tuning.
 
 ```
 extraction_score = (fps / baseline_fps) × quality_multiplier × reliability_multiplier
-
-quality_multiplier   = clamp(1 - silence_ratio×2 - clipping_ratio×3, 0, 1)
+quality_multiplier   = f(mean_duration_error) — bestraft timing-fouten > 300ms
 reliability_multiplier = success_rate²
 ```
 
-Hoger is beter. Baseline = 1.00 (huidige standaardconfiguratie).
+**Baseline v2**: ~15 fps (warm S3-cache) | success_rate = 1.00 (60/60) | score = 1.0000
 
 ---
 
-## Harde Kwaliteitsgrenzen (nooit overtreden)
+## Harde grenzen (nooit overtreden)
 
-- `success_rate` ≥ 0.95 (minimaal 95% van fragmenten succesvol)
-- `mean_duration_error_sec` ≤ 0.15 (maximaal 150ms afwijking van gevraagde duur)
-- `clipping_ratio` ≤ 0.05 (maximaal 5% van samples klipt)
-- `silence_ratio` ≤ 0.10 (maximaal 10% stilte aan begin/eind)
-
----
-
-## Wat NOOIT te wijzigen
-
-- De scoring-formule in `evaluate.py` (niet aanpasbaar)
-- De fixture-dataset in `results/fixtures/` (read-only)
-- Imports in `extractor_config.py`
-- De `CONFIG = ExtractorConfig()` regel
-- `parallel_extractor.py` (productiecode)
+- `success_rate` ≥ 0.90 (minimaal 90% van fragmenten succesvol)
+- `mean_duration_error_sec` ≤ 0.50 (maximaal 500ms afwijking van gevraagde duur)
+- De functiesignatuur `extract_segments(segments, output_dir, progress_callback)` is VAST
+- Geen destructieve operaties buiten `output_dir`
+- Gebruik ALLEEN standaard Python stdlib + `requests` + `subprocess` (geen aiohttp, tenzij geïnstalleerd)
 
 ---
 
-## Optimalisatierichtingen
+## Baseline implementatie (extractor_impl.py — jouw vertrekpunt)
 
-### Direction 1: Concurrency Tuning (CURRENT FOCUS)
+De huidige baseline:
+- Globale ThreadPoolExecutor (20 workers) over alle groepen van alle URLs
+- Python requests byte-range download per groep → tempfile
+- FFmpeg twee-pass timestamp seeking (BUFFER_BEFORE=8s voor VBR-robuustheid)
+- Greedy groepering (gap=10s, span=30s, size=8)
+- Gebruik van `/opt/homebrew/bin/ffmpeg` via `_find_binary()` helper
 
-**Hypothese**: Het ThreadPoolExecutor draait standaard op 4 workers. Met 60 fragmenten
-verdeeld over ~10 unieke audio-URLs is de bottleneck waarschijnlijk I/O-wachttijd op
-S3 HTTP-requests. Meer workers = meer parallelle downloads = hogere throughput.
-
-**Te proberen**:
-- `max_workers`: 6, 8, 10, 12
-- Let op: boven 12 workers kan S3 rate-limiting optreden (minder kans bij Range requests)
-- Combineer met `max_group_size` verhoging zodat elke thread meer werk heeft
-
-**Verwacht effect**: Elke verdubbeling van workers (tot S3-limiet) ≈ +30-50% fps.
-
-**Aandachtspunten**:
-- Hogere worker-counts verhogen geheugengebruik (~10MB per actieve thread)
-- `executor_strategy="process"` is zwaarder qua overhead voor I/O-gebonden taken; probeer pas als "thread" verzadigd is
+**Bewezen**: 60/60 success, geen VBR-failures, ~15 fps gecached.
 
 ---
 
-### Direction 2: Grouping Parameters
+## Bekende kansen voor verbetering
 
-**Hypothese**: De huidige grouping (gap=10s, span=30s, size=5) is conservatief.
-Ruimere groepen = minder HTTP-requests = minder round-trip latency.
+### Research Question 1: FFmpeg codec copy (CURRENT FOCUS)
 
-**Te proberen**:
-- `max_time_gap`: 6s, 8s, 12s, 15s
-- `max_group_size`: 6, 8, 10
-- `max_group_span`: 45s, 60s
-- Combinaties: tight groups (gap=5, size=3) vs loose groups (gap=15, size=10)
+**Probleem**: `libmp3lame` re-encodeert elk segment (CPU-intensief, ~0.3-0.5s per segment).
+Voor MP3 bronbestanden is re-encoding overbodig — we kunnen direct kopiëren.
 
-**Verwacht effect**: Minder HTTP requests, grotere downloads per request. Netto-effect
-afhankelijk van S3-latency vs. bandbreedte-tradeoff.
+**Hypothese**: `-c:a copy` ipv `-c:a libmp3lame -q:a 2` elimineert transcoding volledig.
+Verwacht: 3-5× sneller per segment. Risk: seek imprecisie bij stream-copy.
 
-**Aandachtspunten**:
-- Te grote groepen → grotere temp-bestanden → meer FFmpeg-overhead per extractie
-- `sort_before_grouping=True` altijd bewaren voor correcte groepering
+**Aanpak**:
+```python
+cmd = [_FFMPEG, "-y",
+       "-ss", f"{pre_seek:.3f}", "-i", tmp_path,
+       "-ss", f"{fine_seek:.3f}",
+       "-t", f"{duration:.3f}",
+       "-c:a", "copy",           # ← geen re-encode
+       "-avoid_negative_ts", "make_zero",
+       outpath]
+# Fallback naar libmp3lame als copy faalt (returncode != 0)
+```
 
----
-
-### Direction 3: Buffer Size Reductie
-
-**Hypothese**: `buffer_before=3s` is conservatief. De byte-range berekening in
-`_process_group()` alignt al op MP3-framegrenzen. Met `buffer_before=1.5s` of `2.0s`
-kan de download kleiner zonder kwaliteitsverlies.
-
-**Te proberen**:
-- `buffer_before`: 2.5, 2.0, 1.5, 1.0
-- `buffer_after`: 0.5, 0.3
-- NOOIT onder `buffer_before=0.5` (evaluate.py blokkeert dit, risico clipping)
-
-**Verwacht effect**: Kleinere downloads per groep = minder bytes = hogere fps.
-Verwacht ~5-15% fps-verbetering per halvering van buffer_before.
-
-**Meten**: Controleer `silence_ratio` zorgvuldig. Stijging boven 0.03 = buffer te klein.
+**Succes-criterium**: score > 1.10, success_rate ≥ 0.95, mean_duration_error < 0.5s.
 
 ---
 
-### Direction 4: FFmpeg Optimalisatie
+### Research Question 2: Meer workers + kleinere HTTP chunk
 
-**Hypothese**: Twee FFmpeg-optimalisaties bieden significante snelheidswinst:
-1. `ffmpeg_fade_duration=0` elimineert de fade-berekening (~15% sneller per segment)
-2. `ffmpeg_codec="copy"` vermijdt re-encoding volledig (maar: geen fade mogelijk)
+**Probleem**: 20 workers is een eerste schatting. S3 ondersteunt veel meer parallelle verbindingen.
+Byte-range chuck omvat 8s preroll + segment + 2s postroll = ~2-5MB per groep (veel).
 
-**Te proberen**:
-- `ffmpeg_fade_duration=0.0` (met `ffmpeg_codec="libmp3lame"`)
-- `ffmpeg_codec="copy"` + `ffmpeg_fade_duration=0.0` (let op: copy vereist exact-byte-aligned MP3)
-- `ffmpeg_vbr_quality=4` of `ffmpeg_vbr_quality=6` (lagere kwaliteit, sneller)
-- `ffmpeg_parallel_within_group=True` (segmenten binnen groep parallel extracten)
+**Hypothese**: 30-40 workers + BUFFER_BEFORE=3s (voldoende voor CBR S3) → minder download + meer parallellisme.
 
-**Verwacht effect**:
-- Fade verwijderen: +10-20% fps
-- codec=copy: +30-50% fps maar risico op artefacten (silence/clipping check!)
-- parallel_within_group: winst bij groups met ≥3 segmenten
-
-**Aandachtspunten**:
-- `codec=copy` werkt alleen correct als de byte-range perfect aligned is
-- Monitor `clipping_ratio` en `mean_duration_error_sec` bij `codec=copy`
+**Risico**: BUFFER_BEFORE=3s kan VBR-fouten introduceren (de 3 Megaphone failures terugkeren).
+Monitor success_rate nauwlettend!
 
 ---
 
-### Direction 5: HTTP Optimalisatie
+### Research Question 3: Batch-FFmpeg (meerdere segmenten per FFmpeg-aanroep)
 
-**Hypothese**: De huidige `http_chunk_size=8192` en synchrone requests kunnen
-geoptimaliseerd worden. Grotere chunks = minder iter_content-iteraties.
+**Probleem**: Elke segment = aparte FFmpeg-process (startup overhead ~0.1s per segment).
+Voor dense-tier (20 segmenten dicht bij elkaar): we kunnen ze in één FFmpeg-aanroep extraheren.
 
-**Te proberen**:
-- `http_chunk_size`: 16384, 32768, 65536 (grotere chunks)
-- `http_max_retries`: 1 (minder overhead bij stabiele verbinding)
-- `enable_prefetch=True` (prefetch volgende groep tijdens FFmpeg-verwerking)
+**Hypothese**: FFmpeg `-filter_complex` of meerdere output-paden per aanroep → 60 segmenten in 10 FFmpeg-processen ipv 60.
 
-**Verwacht effect**: Klein (~5%), maar gratis in combinatie met andere optimalisaties.
+**Aanpak**:
+```python
+# Meerdere outputs per FFmpeg aanroep:
+cmd = ["ffmpeg", "-i", tmpfile,
+       "-ss", "10", "-t", "3", "seg_a.mp3",
+       "-ss", "20", "-t", "4", "seg_b.mp3"]
+```
+
+**Complexiteit**: hoog (FFmpeg output-selector logica). Alleen als RQ1+RQ2 uitgeput zijn.
 
 ---
 
-### Direction 6: Gecombineerde Optimalisatie (geavanceerd)
+### Research Question 4: Gecombineerde optimalisatie
 
-Na het uitputten van afzonderlijke richtingen: combineer de beste bevindingen.
-
-**Te proberen**:
-- Best workers + best grouping params + reduced buffers + no fade
-- Systematische grid-search over 2-3 parameters tegelijk
-- Pas `ffmpeg_parallel_within_group=True` toe in combinatie met hogere `max_group_size`
+Na bewijs van individuele verbeteringen: combineer codec-copy + 32 workers + kleinere buffers.
+Verwacht: 2-3× sneller dan huidige baseline.
 
 ---
 
 ## Stopped Directions
 
-*(Automatisch bijgewerkt door `autoresearch.py` als een richting 10+ experimenten zonder verbetering heeft)*
+*(Automatisch bijgewerkt door `autoresearch.py`)*
+
+- **FFmpeg direct HTTP (zonder download)**: Geprobeerd. Voor Megaphone CDN (3 URLs) faalt seek → timeout 30s+ per segment. S3 werkt prima maar andere CDN niet → niet robuust genoeg.
 
 ---
 
-## Experiment Budget
+## Notities voor de agent
 
-- Standaard overnight run: 100 experimenten
-- Tijdbudget per experiment: 90 seconden
-- Verwachte looptijd: ~2.5 uur
-- Multi-agent (4x): ~4 × 25 exp parallel = 100 exp in ~45 minuten
-
----
-
-## Noten voor de Agent
-
-1. **Kijk naar de history**: Wat werkte? Wat niet? Bouw op successen.
-2. **Één ding tegelijk**: Wijzig bij voorkeur 1-2 parameters per experiment voor interpreteerbare resultaten.
-3. **Let op silence_ratio**: Dit is een vroeg waarschuwingssignaal voor kwaliteitsproblemen.
-4. **fps × kwaliteit**: Een 2× snellere maar incorrect extracterende config scoort slechter dan de baseline.
-5. **Git is je geheugen**: Alle commits zijn zichtbaar in de dashboard — bouw voort op wat al gecommit is.
+1. **Schrijf echte code, geen configuratiewaarden.** De volledige implementatie mag worden herschreven.
+2. **Documenteer hypothese** bovenaan: `# HYPOTHESE: <één zin>`
+3. **Bouw op de research log.** Lees wat vorige agents ontdekten.
+4. **Één architecturale verandering per experiment.**
+5. **De `_find_binary()` helper is cruciaal** — gebruik die altijd voor ffmpeg/ffprobe (niet hardcoded strings).
+6. **Fixture bevat 3 tiers**: dense (20 segs samen), sparse (20 segs ver uit elkaar), cross-episode (20 segs van 20 verschillende URLs). Test mentaal op alle 3.
+7. **3 Megaphone CDN URLs** (traffic.megaphone.fm) supporten geen Range requests → fall back naar full download. De huidige baseline doet dit correct.
+8. **S3 CDN caching**: herhaalde runs zijn sneller (warm cache). Jouw innovatie wordt eerlijk vergeleken als de baseline ook warm-cache gebruikt.

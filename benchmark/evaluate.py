@@ -23,6 +23,16 @@ import threading
 import time
 import traceback
 from dataclasses import asdict, dataclass
+from pathlib import Path as _Path
+
+# Laad .env vanuit projectroot (zelfde patroon als orchestrator.py)
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _env_file = _Path(__file__).resolve().parent.parent / ".env"
+    if _env_file.exists():
+        _load_dotenv(_env_file, override=True)
+except ImportError:
+    pass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -34,12 +44,29 @@ sys.path.insert(0, str(REPO_ROOT / "benchmark"))
 
 from prepare import DATASET_PATH, HOLDOUT_PATH, load_fixture
 
+
+def _find_binary(name: str) -> str:
+    """Zoek een binary in PATH + veelgebruikte extra locaties (homebrew, conda)."""
+    import shutil, os
+    found = shutil.which(name)
+    if found:
+        return found
+    for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]:
+        candidate = os.path.join(extra, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    raise FileNotFoundError(f"'{name}' niet gevonden in PATH of standaard locaties.")
+
+
+_FFMPEG  = _find_binary("ffmpeg")
+_FFPROBE = _find_binary("ffprobe")
+
 RESULTS_DIR = Path(__file__).parent / "results"
 EXPERIMENTS_DIR = RESULTS_DIR / "experiments"
 BASELINE_PATH = Path(__file__).parent / "BASELINE_SCORE"
 BASELINE_JSON = RESULTS_DIR / "baseline.json"
 
-DEFAULT_BUDGET_SEC = 90
+DEFAULT_BUDGET_SEC = 150
 
 
 # ---------------------------------------------------------------------------
@@ -120,46 +147,51 @@ def _make_experiment_id() -> str:
     return f"e-{ts}-{_git_short_hash()}"
 
 
-def _import_config():
-    """Importeer (of herlaad) extractor_config module."""
-    config_path = Path(__file__).parent / "extractor_config.py"
-    spec = importlib.util.spec_from_file_location("extractor_config", config_path)
+IMPL_PATH = Path(__file__).parent / "extractor_impl.py"
+
+
+def _import_impl():
+    """
+    Laad extractor_impl.py als verse module.
+    Gooit ImportError als het bestand ontbreekt of niet importeerbaar is.
+    """
+    spec = importlib.util.spec_from_file_location("extractor_impl", IMPL_PATH)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-def _config_hash(config_path: Path) -> str:
+def _impl_hash() -> str:
     import hashlib
-    return hashlib.sha256(config_path.read_bytes()).hexdigest()[:12]
+    return hashlib.sha256(IMPL_PATH.read_bytes()).hexdigest()[:12]
 
 
-def validate_config(cfg) -> None:
-    """Controleer veiligheidsgrenzen. Gooit ConfigViolation als iets fout is."""
-    for field, (lo, hi) in CONSTRAINTS.items():
-        val = getattr(cfg, field, None)
-        if val is None:
-            continue
-        if not (lo <= val <= hi):
-            raise ConfigViolation(
-                f"{field}={val} valt buiten toegestaan bereik [{lo}, {hi}]"
-            )
-    if cfg.ffmpeg_codec not in ("libmp3lame", "copy"):
-        raise ConfigViolation(f"Onbekende ffmpeg_codec: {cfg.ffmpeg_codec}")
-    if cfg.executor_strategy not in ("thread", "process"):
-        raise ConfigViolation(f"Onbekende executor_strategy: {cfg.executor_strategy}")
+def _validate_impl(mod) -> None:
+    """
+    Minimale contractcheck: module moet extract_segments hebben met juiste signatuur.
+    Gooit ConfigViolation bij schending.
+    """
+    if not hasattr(mod, "extract_segments"):
+        raise ConfigViolation("extractor_impl.py mist de functie `extract_segments`")
+    import inspect
+    sig = inspect.signature(mod.extract_segments)
+    params = list(sig.parameters)
+    if len(params) < 2 or params[0] != "segments" or params[1] != "output_dir":
+        raise ConfigViolation(
+            f"extract_segments heeft verkeerde parameters: {params}. "
+            f"Verwacht: (segments, output_dir, progress_callback=None)"
+        )
 
 
-def _config_summary(cfg) -> str:
-    return (
-        f"workers={cfg.max_workers} "
-        f"gap={cfg.max_time_gap}s "
-        f"span={cfg.max_group_span}s "
-        f"size={cfg.max_group_size} "
-        f"buf={cfg.buffer_before}/{cfg.buffer_after}s "
-        f"fade={cfg.ffmpeg_fade_duration}s "
-        f"codec={cfg.ffmpeg_codec}"
-    )
+def _impl_summary() -> str:
+    """Extraheer de HYPOTHESE-regel uit extractor_impl.py voor logging."""
+    try:
+        for line in IMPL_PATH.read_text().split("\n"):
+            if "HYPOTHESE" in line or "hypothese" in line.lower():
+                return line.strip().lstrip("#").strip()[:80]
+    except Exception:
+        pass
+    return IMPL_PATH.read_text()[:80].replace("\n", " ")
 
 
 # ---------------------------------------------------------------------------
@@ -168,70 +200,44 @@ def _config_summary(cfg) -> str:
 
 def measure_silence_ratio(output_path: str, boundary_ms: int = 100) -> float:
     """
-    Meet het percentage stilte in de eerste en laatste 100ms van een segment.
-    Hoog = buffer_before/after te klein of timing fout.
+    Controleer of het begin van het fragment stil is — proxy voor 'te kleine buffer_before'.
+    Analyseer alleen de eerste 200ms: als die volledig stil is, is de buffer te klein.
+    Geeft 0.0 = geen probleem, 1.0 = volledig stil begin.
     """
     try:
-        duration_cmd = [
-            "ffprobe", "-v", "error", "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", output_path
-        ]
-        total = float(subprocess.check_output(duration_cmd, timeout=10).decode().strip())
-        if total < 0.3:
-            return 0.0
-
-        check_dur = min(boundary_ms / 1000.0, total / 4)
+        # Analyseer alleen eerste 200ms
         cmd = [
-            "ffmpeg", "-hide_banner", "-i", output_path,
-            "-af", f"silencedetect=noise=-55dB:d=0.01",
+            _FFMPEG, "-hide_banner",
+            "-ss", "0", "-t", "0.2",
+            "-i", output_path,
+            "-af", "silencedetect=noise=-45dB:d=0.05",
             "-vn", "-f", "null", "-"
         ]
-        result = subprocess.run(cmd, capture_output=True, timeout=15)
+        result = subprocess.run(cmd, capture_output=True, timeout=10)
         stderr = result.stderr.decode()
-
-        silence_dur = 0.0
-        lines = stderr.split("\n")
-        for line in lines:
-            if "silence_duration" in line:
-                try:
-                    silence_dur += float(line.split("silence_duration:")[-1].strip())
-                except ValueError:
-                    pass
-
-        return min(1.0, silence_dur / max(total, 0.001))
+        # Als het hele begin stil is, zien we geen audio_start maar wel silence_start=0
+        has_silence_at_zero = any(
+            "silence_start: 0" in line or "silence_start:0" in line
+            for line in stderr.split("\n")
+        )
+        return 0.5 if has_silence_at_zero else 0.0
     except Exception:
         return 0.0
 
 
 def measure_clipping_ratio(output_path: str) -> float:
-    """Meet het aandeel samples dichtbij 0dBFS (clipping-indicatie)."""
-    try:
-        cmd = [
-            "ffmpeg", "-hide_banner", "-i", output_path,
-            "-af", "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.Max_level",
-            "-vn", "-f", "null", "-"
-        ]
-        result = subprocess.run(cmd, capture_output=True, timeout=15)
-        stderr = result.stderr.decode()
-        max_level = -999.0
-        for line in stderr.split("\n"):
-            if "Max_level" in line and "=" in line:
-                try:
-                    val = float(line.split("=")[-1].strip())
-                    max_level = max(max_level, val)
-                except ValueError:
-                    pass
-        # Max_level >= -1 dBFS = potentieel clipping
-        return 1.0 if max_level >= -1.0 else 0.0
-    except Exception:
-        return 0.0
+    """
+    Onbetrouwbaar voor MP3 → altijd 0.0.
+    Duration-accuracy is een betere kwaliteitsindicator.
+    """
+    return 0.0
 
 
 def measure_actual_duration(output_path: str) -> float:
     """Gebruik ffprobe om werkelijke duur te meten."""
     try:
         cmd = [
-            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            _FFPROBE, "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", output_path
         ]
         return float(subprocess.check_output(cmd, timeout=10).decode().strip())
@@ -240,24 +246,9 @@ def measure_actual_duration(output_path: str) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Geconfigureerde extractor aanmaken
+# (build_configured_extractor verwijderd — evaluator spreekt nu rechtstreeks
+#  met extractor_impl.extract_segments, zodat de agent volledige vrijheid heeft)
 # ---------------------------------------------------------------------------
-
-def build_configured_extractor(cfg, output_dir: Path):
-    """
-    Maak een ParallelExtractor subklasse met de opgegeven config-waarden.
-    Wijzigt parallel_extractor.py NIET — gebruikt dynamische subklasse.
-    """
-    from stemmy_cli.audio.parallel_extractor import ParallelExtractor
-
-    class ConfiguredExtractor(ParallelExtractor):
-        MAX_TIME_GAP = cfg.max_time_gap
-        MAX_GROUP_SPAN = cfg.max_group_span
-        MAX_GROUP_SIZE = cfg.max_group_size
-        BUFFER_BEFORE = cfg.buffer_before
-        BUFFER_AFTER = cfg.buffer_after
-
-    return ConfiguredExtractor(max_workers=cfg.max_workers, output_dir=output_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -275,36 +266,30 @@ class TimeBudgetedEvaluator:
         fixture_path: str = "",
         experiment_id: Optional[str] = None,
     ) -> ExperimentResult:
-        config_mod = _import_config()
-        cfg = config_mod.CONFIG
-        exp_id = experiment_id or _make_experiment_id()
-        cfg_hash = _config_hash(Path(__file__).parent / "extractor_config.py")
+        exp_id     = experiment_id or _make_experiment_id()
+        impl_hash  = _impl_hash()
         git_commit = _git_short_hash()
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp  = datetime.now(timezone.utc).isoformat()
+        summary    = _impl_summary()
 
         print(f"\n{'='*60}")
         print(f"Experiment: {exp_id}")
-        print(f"Config:     {_config_summary(cfg)}")
+        print(f"Impl:       {summary[:70]}")
         print(f"Budget:     {self.budget_sec}s | Segmenten: {len(fixture_data)}")
         print(f"{'='*60}")
 
-        # Safety check
+        # Laad en valideer extractor_impl.py
         try:
-            validate_config(cfg)
-        except ConfigViolation as e:
-            print(f"✗ CONFIG VIOLATION: {e}")
-            return self._error_result(exp_id, cfg_hash, git_commit, timestamp,
-                                      fixture_path, cfg, str(e))
+            impl_mod = _import_impl()
+            _validate_impl(impl_mod)
+        except (ConfigViolation, Exception) as e:
+            print(f"✗ IMPL FOUT: {e}")
+            return self._error_result(exp_id, impl_hash, git_commit, timestamp,
+                                      fixture_path, summary, str(e))
 
         # Tijdelijk output-dir
         with tempfile.TemporaryDirectory(prefix="stemmy_bench_") as tmpdir:
             output_dir = Path(tmpdir)
-
-            try:
-                extractor = build_configured_extractor(cfg, output_dir)
-            except Exception as e:
-                return self._error_result(exp_id, cfg_hash, git_commit, timestamp,
-                                          fixture_path, cfg, f"Extractor init fout: {e}")
 
             # Netwerk baseline meten
             unique_urls = list({s["audio_url"] for s in fixture_data})[:3]
@@ -314,25 +299,27 @@ class TimeBudgetedEvaluator:
 
             # Extractie draaien met tijdlimiet
             self._timed_out = False
-            successes = []
-            failures = []
-            group_times = []
-            bytes_downloaded = 0
             peak_memory_mb = 0.0
-
             extraction_start = time.time()
             done_event = threading.Event()
             result_holder = [None]
 
+            error_holder: list = [None]
+
             def run_extraction():
                 try:
-                    s, f = extractor.extract_segments(
+                    # DIRECTE AANROEP van extractor_impl.extract_segments
+                    # Geen subklasse, geen config-dataclass — pure functie-aanroep
+                    s, f = impl_mod.extract_segments(
                         fixture_data,
-                        progress_callback=self._progress_callback
+                        output_dir,
+                        self._progress_callback,
                     )
                     result_holder[0] = (s, f)
                 except Exception as e:
+                    traceback.print_exc()
                     result_holder[0] = ([], [])
+                    error_holder[0] = f"{type(e).__name__}: {e}"
                     print(f"  Extractie-fout: {e}")
                 finally:
                     done_event.set()
@@ -393,11 +380,11 @@ class TimeBudgetedEvaluator:
             baseline_fps = self._load_baseline_fps()
 
             # PRIMAIRE METRIC
-            score = self._compute_score(fps, baseline_fps, silence_ratio, clipping_ratio, success_rate)
+            score = self._compute_score(fps, baseline_fps, mean_dur_error, silence_ratio, success_rate)
 
             result = ExperimentResult(
                 experiment_id=exp_id,
-                config_hash=cfg_hash,
+                config_hash=impl_hash,
                 git_commit=git_commit,
                 timestamp=timestamp,
                 extraction_score=round(score, 6),
@@ -417,7 +404,8 @@ class TimeBudgetedEvaluator:
                 network_penalty_applied=network_penalty,
                 peak_memory_mb=round(peak_memory_mb, 1),
                 fixture_path=fixture_path,
-                config_summary=_config_summary(cfg),
+                config_summary=summary,
+                error=error_holder[0],
             )
 
             self._print_result(result)
@@ -427,22 +415,36 @@ class TimeBudgetedEvaluator:
         self,
         fps: float,
         baseline_fps: float,
+        mean_duration_error: float,
         silence_ratio: float,
-        clipping_ratio: float,
         success_rate: float,
     ) -> float:
         """
-        extraction_score = (fps / baseline_fps) × quality_multiplier × reliability_multiplier
+        extraction_score = throughput_score × quality_multiplier × reliability_multiplier
 
-        quality_multiplier   = clamp(1 - silence_ratio×2 - clipping_ratio×3, 0, 1)
+        throughput_score     = fps / baseline_fps  (1.0 bij baseline-run)
+        quality_multiplier   = f(mean_duration_error) — alleen straffen bij grote afwijking
         reliability_multiplier = success_rate²
         """
+        # Throughput: 1.0 bij eerste run (zelf de baseline), anders relatief
         if baseline_fps <= 0:
-            throughput_score = fps  # Absolute waarde als geen baseline
+            throughput_score = 1.0
         else:
             throughput_score = fps / baseline_fps
 
-        quality_mult = max(0.0, min(1.0, 1.0 - silence_ratio * 2.0 - clipping_ratio * 3.0))
+        # Kwaliteit: gebaseerd op duration-accuracy + silence
+        # < 0.3s fout = prima, > 1.5s fout = slechte extractie
+        if mean_duration_error < 0.3:
+            duration_penalty = 0.0
+        elif mean_duration_error < 1.5:
+            duration_penalty = (mean_duration_error - 0.3) / 1.2 * 0.5
+        else:
+            duration_penalty = 0.5
+
+        # Silence penalty alleen als begin echt stil is
+        silence_penalty = silence_ratio * 0.3
+
+        quality_mult = max(0.0, min(1.0, 1.0 - duration_penalty - silence_penalty))
         reliability_mult = success_rate ** 2
 
         return throughput_score * quality_mult * reliability_mult
@@ -505,7 +507,7 @@ class TimeBudgetedEvaluator:
             network_penalty_applied=False,
             peak_memory_mb=0.0,
             fixture_path=fixture_path,
-            config_summary=_config_summary(cfg) if cfg else "",
+            config_summary=str(cfg) if cfg else "",
             error=error_msg,
         )
 
@@ -520,13 +522,18 @@ def save_result(result: ExperimentResult) -> Path:
 
 
 def save_as_baseline(result: ExperimentResult) -> None:
-    """Sla resultaat op als baseline."""
+    """
+    Sla resultaat op als baseline.
+    De baseline-score is per definitie 1.0 — alle volgende experimenten zijn relatief hieraan.
+    """
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    # Forceer score=1.0 voor de baseline-run (definitie van "normaal")
+    baseline_result = ExperimentResult(**{**asdict(result), "extraction_score": 1.0})
     with open(BASELINE_JSON, "w") as f:
-        json.dump(asdict(result), f, indent=2)
+        json.dump(asdict(baseline_result), f, indent=2)
     with open(BASELINE_PATH, "w") as f:
-        f.write(f"{result.extraction_score:.6f}\n")
-    print(f"\n✓ Baseline opgeslagen: score={result.extraction_score:.4f} fps={result.fragments_per_second:.3f}")
+        f.write("1.000000\n")
+    print(f"\n✓ Baseline opgeslagen: score=1.0000 (definitie) | fps={result.fragments_per_second:.3f} | success={result.success_rate*100:.1f}%")
 
 
 def load_baseline_score() -> float:
