@@ -1,0 +1,17 @@
+[Unit]
+Description=Grafstemming — Echo Kunstinstallatie
+After=network.target
+
+[Service]
+Type=simple
+User=stemmy
+WorkingDirectory=/opt/stemmy
+ExecStart=/opt/stemmy/.venv/bin/python echo/server.py --db /data/stemmy-replica.db
+Restart=always
+RestartSec=10
+Environment=PATH=/opt/stemmy/.venv/bin:/usr/local/bin:/usr/bin:/bin
+
+# Logs bekijken: journalctl -u stemmy-echo -f
+
+[Install]
+WantedBy=multi-user.target
