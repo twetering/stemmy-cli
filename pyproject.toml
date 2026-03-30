@@ -49,6 +49,15 @@ dev = [
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
 ]
+# Local ASR + RunPod worker reuse same WhisperX pipeline (GPU: runpod_worker; Mac CPU: int8)
+whisperx = [
+    "whisperx>=3.6.0",
+    "jiwer>=3.0.0",
+]
+runpod = [
+    "boto3>=1.34.0",
+    "jiwer>=3.0.0",
+]
 
 [project.scripts]
 stemmy = "stemmy_cli.main:main"

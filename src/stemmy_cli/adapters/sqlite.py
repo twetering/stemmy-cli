@@ -25,6 +25,21 @@ class SQLiteAdapter:
         finally:
             conn.close()
 
+    @contextmanager
+    def write_transaction(self) -> Generator[sqlite3.Connection, None, None]:
+        """Single COMMIT for multiple writes (e.g. bulk transcript import)."""
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("BEGIN")
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def _rows_to_dicts(self, rows: List[sqlite3.Row]) -> List[Dict[str, Any]]:
         """Convert sqlite3.Row objects to dictionaries."""
         return [dict(row) for row in rows]
@@ -114,8 +129,19 @@ class SQLiteAdapter:
             cursor = conn.execute(f'PRAGMA table_info("{table}")')
             return self._rows_to_dicts(cursor.fetchall())
 
-    def execute_raw(self, sql: str, params: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
-        """Execute raw SQL query."""
+    def execute_raw(
+        self,
+        sql: str,
+        params: Optional[List[Any]] = None,
+        connection: Optional[sqlite3.Connection] = None,
+    ) -> List[Dict[str, Any]]:
+        """Execute raw SQL. When connection is set, caller owns transaction (no auto-commit)."""
+        if connection is not None:
+            cursor = connection.execute(sql, params or [])
+            if cursor.description:
+                return self._rows_to_dicts(cursor.fetchall())
+            return []
+
         with self.connection() as conn:
             cursor = conn.execute(sql, params or [])
             if cursor.description:
@@ -127,6 +153,7 @@ class SQLiteAdapter:
         self,
         table: str,
         data: Dict[str, Any],
+        connection: Optional[sqlite3.Connection] = None,
     ) -> str:
         """Insert a new record into a table."""
         if not data:
@@ -146,6 +173,10 @@ class SQLiteAdapter:
 
         sql = f'INSERT INTO "{table}" ({", ".join(columns)}) VALUES ({", ".join(placeholders)})'
 
+        if connection is not None:
+            connection.execute(sql, params)
+            return str(data.get("id", ""))
+
         with self.connection() as conn:
             conn.execute(sql, params)
             conn.commit()
@@ -156,6 +187,7 @@ class SQLiteAdapter:
         table: str,
         id_value: str,
         data: Dict[str, Any],
+        connection: Optional[sqlite3.Connection] = None,
     ) -> bool:
         """Update a record by ID."""
         if not data:
@@ -172,6 +204,10 @@ class SQLiteAdapter:
 
         params.append(id_value)
         sql = f'UPDATE "{table}" SET {", ".join(set_parts)} WHERE "id" = ?'
+
+        if connection is not None:
+            cursor = connection.execute(sql, params)
+            return cursor.rowcount > 0
 
         with self.connection() as conn:
             cursor = conn.execute(sql, params)

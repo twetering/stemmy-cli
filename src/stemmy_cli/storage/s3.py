@@ -56,3 +56,33 @@ def upload_audio_to_s3(
         ExtraArgs={"ContentType": "audio/mpeg"},
     )
     return f"https://{bucket}.s3.{region}.amazonaws.com/{s3_key}"
+
+
+def parse_s3_uri(uri: str) -> tuple[str, str]:
+    """Parse s3://bucket/key into (bucket, key). Key may contain slashes."""
+    u = (uri or "").strip()
+    if not u.startswith("s3://"):
+        raise ValueError(f"Not an s3 URI: {uri!r}")
+    rest = u[5:]
+    if "/" not in rest:
+        raise ValueError(f"Invalid s3 URI (no key): {uri!r}")
+    bucket, key = rest.split("/", 1)
+    if not bucket or not key:
+        raise ValueError(f"Invalid s3 URI: {uri!r}")
+    return bucket, key
+
+
+def download_s3_object_bytes(bucket: str, key: str) -> bytes:
+    """Download object body; credentials from env (same as upload)."""
+    s3 = _get_s3_client()
+    resp = s3.get_object(Bucket=bucket, Key=key)
+    return resp["Body"].read()
+
+
+def download_transcript_json_from_s3_uri(s3_uri: str) -> dict:
+    """Fetch JSON transcript payload (RunPod worker output: completed status + transcript_data)."""
+    import json
+
+    bucket, key = parse_s3_uri(s3_uri)
+    raw = download_s3_object_bytes(bucket, key)
+    return json.loads(raw.decode("utf-8"))
