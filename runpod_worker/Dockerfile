@@ -1,6 +1,6 @@
-# NVIDIA CUDA + cuDNN runtime — avoids missing libcudnn in generic Python images.
-# Pin the base tag to match your RunPod GPU driver / CUDA capability.
-FROM nvidia/cuda:12.4.1-cudnn9-runtime-ubuntu22.04
+# NVIDIA CUDA + cuDNN 9 runtime (tag must exist on Docker Hub).
+# 12.4.1-cudnn9-runtime-ubuntu22.04 is not published; 12.3.2-cudnn9 is.
+FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \

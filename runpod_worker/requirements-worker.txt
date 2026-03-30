@@ -1,8 +1,8 @@
-# RunPod GPU worker: match PyTorch CUDA 12.4 + cuDNN in base image.
+# PyTorch cu121 wheels align with CUDA 12.3.x runtime image above (driver ≥12.1 on RunPod).
 # WhisperX pinned for reproducible builds.
---extra-index-url https://download.pytorch.org/whl/cu124
-torch==2.5.1+cu124
-torchaudio==2.5.1+cu124
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1+cu121
+torchaudio==2.5.1+cu121
 numpy>=1.24.0,<2.0.0
 whisperx==3.6.0
 runpod>=1.7.0,<2
