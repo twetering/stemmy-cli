@@ -4,8 +4,7 @@ FROM nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PYTHONPATH=/app/stemmy_pkg
+    PIP_NO_CACHE_DIR=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -18,13 +17,8 @@ WORKDIR /app
 
 COPY runpod_worker/requirements-worker.txt /app/requirements-worker.txt
 RUN python3 -m pip install --upgrade pip setuptools wheel \
-    && python3 -m pip install -r /app/requirements-worker.txt
-
-# Package tree: repo src/stemmy_cli/ → import stemmy_cli
-COPY src/stemmy_cli /app/stemmy_pkg/stemmy_cli
-
-# CPU-only machine builds: verify imports only (GPU is checked at runtime / HEALTHCHECK).
-RUN python3 -c "import torch; import whisperx; print('build_check torch', getattr(torch, '__version__', '?'))"
+    && python3 -m pip install -r /app/requirements-worker.txt \
+    && python3 -c "import faster_whisper, ctranslate2; print('build_check', faster_whisper.__version__)"
 
 COPY runpod_worker/healthcheck_cuda.py /app/healthcheck_cuda.py
 COPY runpod_worker/handler.py /app/handler.py

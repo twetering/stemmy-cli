@@ -1,28 +1,4 @@
-"""
-RunPod Serverless handler: WhisperX on GPU → transcript JSON → S3.
-
-Input schema (job["input"]):
-  item_id (str, required)
-  audio_url (str, required HTTPS URL to audio)
-  language (str, default "nl")
-  model (str, default "large-v2")
-  diarize (bool, default True)
-  batch_size (int, default 8)
-  compute_type (str, default "float16"; GPU)
-  min_speakers / max_speakers (optional int)
-  output (dict):
-    s3_bucket (str, required unless env S3_OUTPUT_BUCKET)
-    s3_key (str, optional; default transcripts/runpod/{item_id}.json)
-    aws_access_key_id, aws_secret_access_key, aws_region (optional; else env AWS_*)
-
-Output (return value):
-  ok (bool)
-  s3_uri (str | null)
-  item_id (str)
-  seconds_audio (float | null)
-  seconds_compute (float)
-  error (str | null)
-"""
+"""RunPod Serverless handler: fast stable profile (faster-whisper -> S3 JSON)."""
 from __future__ import annotations
 
 import json
@@ -30,12 +6,24 @@ import logging
 import os
 import tempfile
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
+import httpx
 import runpod
+from faster_whisper import WhisperModel
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("runpod_whisperx")
+logger = logging.getLogger("runpod_asr")
+
+_MODELS: Dict[str, WhisperModel] = {}
+
+
+def _get_model(model_name: str, compute_type: str) -> WhisperModel:
+    key = f"{model_name}:{compute_type}"
+    if key not in _MODELS:
+        logger.info("loading model=%s compute_type=%s", model_name, compute_type)
+        _MODELS[key] = WhisperModel(model_name, device="cuda", compute_type=compute_type)
+    return _MODELS[key]
 
 
 def _s3_client(
@@ -73,8 +61,61 @@ def _upload_json(
         Body=body,
         ContentType="application/json; charset=utf-8",
     )
-    reg = region or os.getenv("AWS_REGION", "eu-north-1")
     return f"s3://{bucket}/{key}"
+
+
+def _download_audio_to_file(audio_url: str, out_path: str) -> None:
+    with httpx.Client(timeout=600.0, follow_redirects=True) as client:
+        with client.stream("GET", audio_url) as response:
+            response.raise_for_status()
+            with open(out_path, "wb") as f:
+                for chunk in response.iter_bytes():
+                    f.write(chunk)
+
+
+def _segments_to_transcript_data(segments: List[Any]) -> Dict[str, Any]:
+    utterances: List[Dict[str, Any]] = []
+    flat_words: List[Dict[str, Any]] = []
+
+    for seg in segments:
+        seg_text = (getattr(seg, "text", "") or "").strip()
+        seg_start = float(getattr(seg, "start", 0.0) or 0.0)
+        seg_end = float(getattr(seg, "end", seg_start) or seg_start)
+
+        words_out: List[Dict[str, Any]] = []
+        for w in getattr(seg, "words", None) or []:
+            word_txt = (getattr(w, "word", "") or "").strip()
+            if not word_txt:
+                continue
+            st = int(round(float(getattr(w, "start", seg_start) or seg_start) * 1000))
+            en = int(round(float(getattr(w, "end", seg_end) or seg_end) * 1000))
+            conf = float(getattr(w, "probability", 0.0) or 0.0)
+            wd = {"text": word_txt, "start": st, "end": en, "confidence": conf}
+            words_out.append(wd)
+            flat_words.append(wd)
+
+        avg_conf = (
+            sum(float(w.get("confidence", 0.0)) for w in words_out) / len(words_out)
+            if words_out
+            else 0.0
+        )
+        utterances.append(
+            {
+                "start": int(round(seg_start * 1000)),
+                "end": int(round(seg_end * 1000)),
+                "text": seg_text,
+                "speaker": "A",
+                "confidence": avg_conf,
+                "words": words_out,
+            }
+        )
+
+    return {
+        "utterances": utterances,
+        "words": flat_words,
+        "entities": [],
+        "text": " ".join(u["text"] for u in utterances if u.get("text")),
+    }
 
 
 def handler(job: Dict[str, Any]) -> Dict[str, Any]:
@@ -93,9 +134,9 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     language = str(inp.get("language") or "nl")
-    model = str(inp.get("model") or "large-v2")
-    diarize = bool(inp.get("diarize", True))
-    batch_size = int(inp.get("batch_size") or 8)
+    model = str(inp.get("model") or "large-v3-turbo")
+    diarize = bool(inp.get("diarize", False))
+    beam_size = int(inp.get("beam_size") or 5)
     compute_type = str(inp.get("compute_type") or "float16")
 
     out_cfg = inp.get("output") or {}
@@ -123,63 +164,29 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
             "error": "output.s3_bucket or S3_OUTPUT_BUCKET / S3_BUCKET_NAME required",
         }
 
-    hf_token = (
-        os.getenv("HF_TOKEN")
-        or os.getenv("HUGGINGFACE_HUB_TOKEN")
-        or os.getenv("HF_API_KEY")
-    )
-
     try:
-        from stemmy_cli.storage.whisperx_local import (
-            WhisperXRunner,
-            WhisperXRunnerConfig,
-            download_audio_to_file,
-        )
-
-        cfg = WhisperXRunnerConfig(
-            model=model,
-            language=language,
-            device="cuda",
-            compute_type=compute_type,
-            batch_size=batch_size,
-            diarize=diarize,
-            min_speakers=inp.get("min_speakers"),
-            max_speakers=inp.get("max_speakers"),
-            hf_token=hf_token,
-            threads=int(os.getenv("WHISPERX_THREADS", "4")),
-        )
+        asr = _get_model(model, compute_type)
 
         t_dl = time.perf_counter()
         with tempfile.TemporaryDirectory(prefix="stemmy_rp_") as tmp:
-            audio_path = str(download_audio_to_file(audio_url, tmp))
+            audio_path = os.path.join(tmp, "audio_input.mp3")
+            _download_audio_to_file(audio_url, audio_path)
             dl_sec = time.perf_counter() - t_dl
             logger.info("download done in %.1fs", dl_sec)
 
             t_tr = time.perf_counter()
-            runner = WhisperXRunner(cfg)
-            try:
-                status = runner.transcribe_file(audio_path, print_progress=False)
-            finally:
-                runner.release()
+            segments, _info = asr.transcribe(
+                audio_path,
+                language=language or None,
+                beam_size=beam_size,
+                word_timestamps=True,
+            )
+            segs = list(segments)
             tr_sec = time.perf_counter() - t_tr
 
-        if status.get("status") != "completed":
-            return {
-                "ok": False,
-                "s3_uri": None,
-                "item_id": item_id,
-                "seconds_audio": None,
-                "seconds_compute": time.perf_counter() - t0,
-                "error": "WhisperX did not produce completed status",
-            }
+        status = {"status": "completed", "transcript_data": _segments_to_transcript_data(segs)}
 
         s3_uri = _upload_json(bucket, s3_key, status, access_key=ak, secret_key=sk, region=region)
-        try:
-            import torch
-
-            del torch
-        except Exception:
-            pass
 
         return {
             "ok": True,
@@ -187,6 +194,12 @@ def handler(job: Dict[str, Any]) -> Dict[str, Any]:
             "item_id": item_id,
             "seconds_audio": dl_sec + tr_sec,
             "seconds_compute": time.perf_counter() - t0,
+            "engine": "faster-whisper",
+            "warning": (
+                "diarize=true ignored in stable profile; enable WhisperX profile after baseline is stable"
+                if diarize
+                else None
+            ),
             "error": None,
         }
     except Exception as e:

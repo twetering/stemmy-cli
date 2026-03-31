@@ -1,11 +1,6 @@
-# PyTorch cu121 wheels align with CUDA 12.3.x runtime image above (driver ≥12.1 on RunPod).
-# WhisperX pinned for reproducible builds.
---extra-index-url https://download.pytorch.org/whl/cu121
-torch==2.5.1+cu121
-torchaudio==2.5.1+cu121
-# whisperx 3.6.x requires numpy>=2.0.2,<2.1.0
-numpy>=2.0.2,<2.1.0
-whisperx==3.6.0
-runpod>=1.7.0,<2
+# Stable profile for first deployment: no WhisperX/pyannote dependency chain.
+# Uses faster-whisper (GPU ASR + word timestamps), diarization can be added later.
+faster-whisper==1.1.1
+runpod>=1.8.0,<2
 boto3>=1.34.0
 httpx>=0.27.0
