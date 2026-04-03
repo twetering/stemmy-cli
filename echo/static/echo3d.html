@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GRAFSTEMMING 3D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Manrope:wght@300;400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/echo/static/echo3d.css">
+</head>
+<body>
+  <div id="scene-root"></div>
+
+  <div id="hud">
+    <div class="panel title-panel">
+      <div class="eyebrow">Grafstemming 3D</div>
+      <h1>daal af in de echo-put</h1>
+      <p>Beweeg met WASD of pijltjes. Kijk rond door te slepen. Vind fluisterlichten en druk <strong>E</strong> om hun woord de diepte in te roepen.</p>
+    </div>
+
+    <div class="panel controls-panel">
+      <div class="input-row">
+        <button id="mic-btn" class="icon-btn" title="Spreek">🎙</button>
+        <input id="word-input" type="text" placeholder="roep een woord of zin..." autocomplete="off" spellcheck="false">
+        <button id="send-btn" class="action-btn">roep</button>
+      </div>
+      <div class="button-row">
+        <button id="random-btn" class="ghost-btn">willekeurig</button>
+        <button id="multi-btn" class="ghost-btn">drievoudige echo: uit</button>
+        <div id="echo-levels" class="echo-levels">
+          <button data-level="0">droog</button>
+          <button data-level="1">licht</button>
+          <button data-level="2" class="active">normaal</button>
+          <button data-level="3">diep</button>
+        </div>
+        <a href="/echo" class="ghost-btn link-btn">oude versie</a>
+      </div>
+    </div>
+
+    <div class="panel score-panel">
+      <div><span class="label">score</span><strong id="score-val">0</strong></div>
+      <div><span class="label">streak</span><strong id="streak-val">0</strong></div>
+      <div><span class="label">beste</span><strong id="highscore-val">0</strong></div>
+    </div>
+
+    <div class="panel status-panel">
+      <div id="status">de put luistert</div>
+      <div id="prompt">zoek een fluisterlicht of typ zelf een woord</div>
+      <div id="context"></div>
+    </div>
+  </div>
+
+  <div id="crosshair"></div>
+  <div id="toast-layer"></div>
+  <audio id="player" preload="none"></audio>
+
+  <script type="module" src="/echo/static/echo3d.js"></script>
+</body>
+</html>

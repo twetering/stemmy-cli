@@ -412,6 +412,23 @@ class RPGShell:
     def _concat_audio_files(self, file_list: Path, output_path: str) -> None:
         """Concatenate audio files with re-encode to avoid timestamp gaps."""
         import subprocess
+
+        # Valideer files.txt: verwijder lege/ontbrekende bestanden vóór concat.
+        # Een enkel corrupt segment breekt de volledige FFmpeg concat-run.
+        valid_lines = []
+        with open(file_list) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                # Formaat: file '/pad/naar/seg.mp3'
+                path_str = line.removeprefix("file '").removesuffix("'")
+                p = Path(path_str)
+                if p.exists() and p.stat().st_size > 100:  # min 100 bytes
+                    valid_lines.append(line)
+        with open(file_list, "w") as f:
+            f.write("\n".join(valid_lines) + "\n")
+
         cmd = [
             "ffmpeg", "-y", "-f", "concat", "-safe", "0",
             "-i", str(file_list),
@@ -419,7 +436,13 @@ class RPGShell:
             "-c:a", "libmp3lame", "-q:a", "2",
             output_path,
         ]
-        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0:
+            # Toon de werkelijke FFmpeg-fout (was verborgen door capture_output)
+            raise RuntimeError(
+                f"FFmpeg concat mislukt (exit {result.returncode}):\n"
+                + result.stderr[-600:]
+            )
     
     def _scan_music(self) -> List[Path]:
         """Find available background music in static/music/."""
@@ -1443,7 +1466,7 @@ class RPGShell:
             # Use parallel extractor
             from stemmy_cli.audio.parallel_extractor import ParallelExtractor
             
-            extractor = ParallelExtractor(max_workers=4, output_dir=temp_dir)
+            extractor = ParallelExtractor(max_workers=20, output_dir=temp_dir)  # globale executor
             
             def update_progress(current, total, msg):
                 pct = 10 + (70 * current / max(total, 1))

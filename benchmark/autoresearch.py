@@ -1080,6 +1080,77 @@ def _merge_best_from_worktrees(worktree_paths: list) -> None:
     else:
         print("\nGeen verbetering gevonden in worktrees.")
 
+    # Merge research_log entries uit alle worktrees terug in de hoofd-log.
+    # Worktree-agents schrijven naar hun lokale kopie; zonder merge gaan alle
+    # experiment-entries verloren na afloop van de parallelle run.
+    _merge_worktree_research_logs(worktree_paths)
+
+
+def _merge_worktree_research_logs(worktree_paths: list) -> None:
+    """
+    Voeg research_log entries uit worktrees samen in de hoofd-research_log.
+    Leest de marker <!-- Nieuwe entries hieronder toevoegen --> om te bepalen
+    waar hoofd-entries ophouden en nieuwe worktree-entries beginnen.
+    """
+    MARKER = "<!-- Nieuwe entries hieronder toevoegen -->"
+
+    main_log = RESEARCH_LOG_PATH
+    if not main_log.exists():
+        return
+
+    main_content = main_log.read_text(encoding="utf-8")
+
+    # Bepaal welke experiment-IDs al in de hoofd-log staan
+    existing_ids: set[str] = set()
+    for line in main_content.splitlines():
+        if line.startswith("## e-") or line.startswith("## SKIP-"):
+            # Formaat: ## e-20260322-103100-e110531 | score: ...
+            parts = line.split("|")
+            exp_id = parts[0].replace("##", "").strip()
+            existing_ids.add(exp_id)
+
+    new_entries: list[str] = []
+
+    for wt_path in worktree_paths:
+        wt_log = wt_path / "benchmark" / "research_log.md"
+        if not wt_log.exists():
+            continue
+        wt_content = wt_log.read_text(encoding="utf-8")
+
+        # Pak alles NA de marker (dat zijn de echte experiment-entries)
+        if MARKER in wt_content:
+            after_marker = wt_content.split(MARKER, 1)[1]
+        else:
+            after_marker = wt_content
+
+        # Splits in losse entries op "## " aan het begin van een regel
+        raw_entries = [e.strip() for e in after_marker.split("\n## ") if e.strip()]
+        for entry in raw_entries:
+            # Herstel de "## " prefix die we wegsplitsten
+            if not entry.startswith("##"):
+                entry = "## " + entry
+            # Controleer of dit experiment al in de hoofd-log staat
+            first_line = entry.splitlines()[0]
+            parts = first_line.split("|")
+            exp_id = parts[0].replace("##", "").strip()
+            if exp_id and exp_id not in existing_ids:
+                new_entries.append(entry)
+                existing_ids.add(exp_id)
+
+    if not new_entries:
+        print("  research_log: geen nieuwe entries uit worktrees.")
+        return
+
+    # Voeg nieuwe entries toe NA de marker
+    if MARKER in main_content:
+        before, after = main_content.split(MARKER, 1)
+        merged = before + MARKER + "\n\n" + "\n\n---\n\n".join(new_entries) + "\n\n---\n" + after
+    else:
+        merged = main_content + "\n\n---\n\n" + "\n\n---\n\n".join(new_entries) + "\n"
+
+    main_log.write_text(merged, encoding="utf-8")
+    print(f"  ✓ research_log: {len(new_entries)} entries gemerged uit {len(worktree_paths)} worktrees.")
+
 
 # ---------------------------------------------------------------------------
 # CLI

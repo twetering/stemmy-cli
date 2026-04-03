@@ -35,6 +35,9 @@ dependencies = [
     "typer>=0.9.0",
     "rich>=13.0.0",
     "httpx>=0.25.0",
+    "requests>=2.28.0",
+    "google-genai>=1.12.1",
+    "websockets>=12.0",
     "feedparser>=6.0.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
@@ -48,6 +51,17 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
     "ruff>=0.1.0",
+]
+# Local ASR: WhisperX (torch, pyannote). On macOS prefer Python 3.12 — PyTorch 3.13 wheels may fail Gatekeeper.
+# stemmy transcripts transcribe-local / benchmark whisperx: --device cpu --compute-type int8 on Mac
+whisperx = [
+    "whisperx>=3.6.0",
+    "jiwer>=3.0.0",
+]
+# RunPod orchestration (HTTP) + S3 download of transcripts; boto3 often already in env
+runpod = [
+    "boto3>=1.34.0",
+    "jiwer>=3.0.0",
 ]
 
 [project.scripts]

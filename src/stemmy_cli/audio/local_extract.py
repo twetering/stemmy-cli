@@ -9,8 +9,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Callable
 from stemmy_cli.audio.parallel_extractor import ParallelExtractor, ExtractionResult
 
 
-def _get_max_workers(default: int = 4) -> int:
-    """Get max workers from env or default."""
+def _get_max_workers(default: int = 20) -> int:
+    """Get max workers from env or default (standaard 20 voor globale executor)."""
     env = os.getenv("STEMMY_EXTRACT_WORKERS")
     if not env:
         return default
@@ -59,9 +59,15 @@ def extract_segments_local(
     output_dir: Optional[Path] = None,
     max_workers: Optional[int] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    use_global_executor: bool = True,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
-    Extract segments locally using ParallelExtractor.
+    Extraheer segmenten lokaal via ParallelExtractor.
+
+    Args:
+        use_global_executor: True (standaard) = globale ThreadPoolExecutor over alle URLs
+                              tegelijk (~14× sneller bij cross-URL werklasten).
+                              False = legacy per-URL aanpak (bewaard voor vergelijking).
 
     Returns:
         (successes, failures)
@@ -84,6 +90,7 @@ def extract_segments_local(
     extractor = ParallelExtractor(
         max_workers=max_workers or _get_max_workers(),
         output_dir=output_dir,
+        use_global_executor=use_global_executor,
     )
     successes_raw, failures_raw = extractor.extract_segments(
         normalized_segments, progress_callback=progress_callback

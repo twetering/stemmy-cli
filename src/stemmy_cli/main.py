@@ -23,6 +23,7 @@ _configure_terminal()
 from stemmy_cli.commands import (
     analyze,
     audio,
+    benchmark,
     characters,
     chat,
     compilations,
@@ -35,6 +36,7 @@ from stemmy_cli.commands import (
     knowledge,
     mix,
     recipes,
+    runpod,
     search,
     sounds,
     stemmies,
@@ -93,6 +95,8 @@ app.add_typer(chat.app, name="chat", help="Chat-based generation")
 app.add_typer(recipes.app, name="recipes", help="Creative audio recipes")
 app.add_typer(mix.app, name="mix", help="Audio mixing and blending")
 app.add_typer(workflows.app, name="workflows", help="Automated workflows")
+app.add_typer(benchmark.app, name="benchmark", help="Reference benchmarks (WhisperX vs DB)")
+app.add_typer(runpod.app, name="runpod", help="RunPod GPU transcripts (S3 → SQLite)")
 
 
 @app.command()

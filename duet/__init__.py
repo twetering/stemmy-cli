@@ -1,0 +1,2 @@
+"""Het Duet application package."""
+

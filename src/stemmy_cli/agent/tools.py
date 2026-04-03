@@ -587,15 +587,14 @@ def _analyze_lexical(
                 item_title=row_dict.get("item_title", ""),
             )
             for m in matches:
+                # Bewaar de zin als context voor display, maar behoud
+                # de woord-niveau timing voor extractie. Zo krijg je
+                # het exacte woord als clip, niet de hele zin.
                 sent = _sentence_for_word_index(
                     words_data, m.get("word_index", -1), max_sentence_seconds=max_sentence_seconds
                 )
-                if not sent:
-                    continue
-                m["text"] = sent["text"]
-                m["start_time"] = sent["start_time"]
-                m["end_time"] = sent["end_time"]
-                m["duration"] = sent["duration"]
+                if sent:
+                    m["context"] = sent["text"]
                 results.append(m)
         except (json.JSONDecodeError, KeyError, TypeError):
             continue

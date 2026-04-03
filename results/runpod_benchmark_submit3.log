@@ -1,0 +1,128 @@
+ℹ Submitting RunPod job (this may take a long time)…
+INFO:httpx:HTTP Request: POST https://api.runpod.ai/v2/y7wt8mpi5qo89s/run "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET https://api.runpod.ai/v2/y7wt8mpi5qo89s/status/509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2 "HTTP/1.1 200 OK"
+
+RunPod episode benchmark (submit)
+  ok: True
+  item_id: dad3ee32-f913-42a4-b3fc-f7c1e792155d
+  job_id: 509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2
+  wall_submit_sec: 0.8204179579624906
+  runpod_status: {
+  "delayTime": 901,
+  "executionTime": 449585,
+  "id": "509e47fa-7767-4272-b1e6-9a4d4c04b7c7-e2",
+  "output": {
+    "engine": "faster-whisper",
+    "item_id": "dad3ee32-f913-42a4-b3fc-f7c1e792155d",
+    "ok": true,
+    "s3_uri": 
+"s3://voxpop/transcripts/runpod/dad3ee32-f913-42a4-b3fc-f7c1e792155d.json",
+    "seconds_audio": 446.1665107673034,
+    "seconds_compute": 449.50328509509563,
+    "warning": "diarize=true ignored in stable profile; enable WhisperX profile 
+after baseline is stable"
+  },
+  "status": "COMPLETED",
+  "workerId": "2iyclzyis3v879"
+}
+  s3_uri: 
+s3://voxpop/transcripts/runpod/dad3ee32-f913-42a4-b3fc-f7c1e792155d.json
+  wer: 0.15747555750851366
+  cer: 0.12613988033835363
+  hypothesis_chars: 93082
+  reference_chars: 99871
+  num_segments: 3108
+  num_speakers: 1
+  seconds_audio: 446.1665107673034
+  seconds_compute: 449.50328509509563
+  rtf: 1.007478764647875
+  waited: True
