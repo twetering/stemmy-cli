@@ -1,17 +1,16 @@
 import * as THREE from "https://unpkg.com/three@0.164.1/build/three.module.js";
 
-const ARENA_RADIUS = 26;
-const PLAYER_HEIGHT = 1.7;
-const PLAYER_SPEED = 7.2;
-const WISP_COUNT = 6;
-
 const root = document.getElementById("scene-root");
-const input = document.getElementById("word-input");
+const body = document.body;
+const wordInput = document.getElementById("word-input");
 const sendBtn = document.getElementById("send-btn");
 const randomBtn = document.getElementById("random-btn");
 const multiBtn = document.getElementById("multi-btn");
 const micBtn = document.getElementById("mic-btn");
+const musicBtn = document.getElementById("music-btn");
+const collapseBtn = document.getElementById("collapse-btn");
 const playerAudio = document.getElementById("player");
+const ambienceAudio = document.getElementById("ambience");
 
 const ui = {
   score: document.getElementById("score-val"),
@@ -20,8 +19,31 @@ const ui = {
   status: document.getElementById("status"),
   prompt: document.getElementById("prompt"),
   context: document.getElementById("context"),
+  history: document.getElementById("history"),
+  ritualLine: document.getElementById("ritual-line"),
+  wordLayer: document.getElementById("word-layer"),
   toastLayer: document.getElementById("toast-layer"),
 };
+
+const state = {
+  pointerX: 0,
+  pointerY: 0,
+  smoothX: 0,
+  smoothY: 0,
+  echoLevel: 2,
+  multiMode: false,
+  score: 0,
+  streak: 0,
+  highScore: parseInt(localStorage.getItem("grafstemming_3d_hs") || "0", 10),
+  activeController: null,
+  currentAudioUrl: null,
+  musicEnabled: true,
+  musicStarted: false,
+  collapsed: false,
+  listening: false,
+};
+
+ui.high.textContent = String(state.highScore);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -30,229 +52,224 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 root.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x04070d, 0.04);
+scene.fog = new THREE.FogExp2(0x06080d, 0.043);
 
-const camera = new THREE.PerspectiveCamera(68, window.innerWidth / window.innerHeight, 0.1, 220);
-camera.position.set(0, PLAYER_HEIGHT, 12);
-
+const camera = new THREE.PerspectiveCamera(46, window.innerWidth / window.innerHeight, 0.1, 170);
 const clock = new THREE.Clock();
-const player = {
-  position: new THREE.Vector3(0, PLAYER_HEIGHT, 12),
-  yaw: Math.PI,
-  pitch: -0.12,
-  bob: 0,
-};
-const keys = new Set();
 
-let echoLevel = 2;
-let multiMode = false;
-let activeController = null;
-let currentAudioUrl = null;
-let score = 0;
-let streak = 0;
-let highScore = parseInt(localStorage.getItem("grafstemming_3d_hs") || "0", 10);
-let listening = false;
-let mouseDown = false;
-let nearestWisp = null;
-
-ui.high.textContent = String(highScore);
-
-const ambient = new THREE.HemisphereLight(0x8db0ff, 0x0a0b10, 0.8);
+const ambient = new THREE.HemisphereLight(0x8ea9cf, 0x07080a, 0.78);
 scene.add(ambient);
 
-const moon = new THREE.DirectionalLight(0x9eb9ff, 1.1);
-moon.position.set(8, 18, 6);
+const moon = new THREE.DirectionalLight(0x9eb9df, 1.25);
+moon.position.set(-12, 20, 7);
 scene.add(moon);
 
-const glow = new THREE.PointLight(0x6aa7ff, 3.1, 26, 2);
-glow.position.set(0, 0.2, 0);
-scene.add(glow);
+const pitLight = new THREE.PointLight(0x79a2d4, 5.6, 38, 2);
+pitLight.position.set(0, -12, 0);
+scene.add(pitLight);
 
 const floor = new THREE.Mesh(
-  new THREE.CircleGeometry(ARENA_RADIUS + 10, 96),
-  new THREE.MeshStandardMaterial({
-    color: 0x0b111a,
-    roughness: 0.95,
-    metalness: 0.08,
-  }),
+  new THREE.CircleGeometry(28, 128),
+  new THREE.MeshStandardMaterial({ color: 0x141922, roughness: 0.98, metalness: 0.02 }),
 );
 floor.rotation.x = -Math.PI / 2;
 scene.add(floor);
 
-const floorGrid = new THREE.LineSegments(
-  new THREE.EdgesGeometry(new THREE.CircleGeometry(ARENA_RADIUS + 6, 32)),
-  new THREE.LineBasicMaterial({ color: 0x2b3956, transparent: true, opacity: 0.34 }),
-);
-floorGrid.rotation.x = -Math.PI / 2;
-floorGrid.position.y = 0.02;
-scene.add(floorGrid);
-
-const pitGroup = new THREE.Group();
-scene.add(pitGroup);
-
-const rim = new THREE.Mesh(
-  new THREE.TorusGeometry(5.1, 0.38, 20, 64),
-  new THREE.MeshStandardMaterial({ color: 0x2a364d, metalness: 0.12, roughness: 0.7 }),
-);
-rim.rotation.x = Math.PI / 2;
-pitGroup.add(rim);
-
-const innerPit = new THREE.Mesh(
-  new THREE.CylinderGeometry(4.5, 5, 7, 48, 1, true),
+const path = new THREE.Mesh(
+  new THREE.RingGeometry(8.4, 20.5, 128),
   new THREE.MeshStandardMaterial({
-    color: 0x060910,
+    color: 0x0e141b,
     roughness: 0.94,
     transparent: true,
-    opacity: 0.96,
+    opacity: 0.95,
+  }),
+);
+path.rotation.x = -Math.PI / 2;
+path.position.y = 0.02;
+scene.add(path);
+
+const wellBody = new THREE.Mesh(
+  new THREE.CylinderGeometry(7.2, 7.6, 2.9, 128),
+  new THREE.MeshStandardMaterial({ color: 0x2a313c, roughness: 0.9, metalness: 0.04 }),
+);
+wellBody.position.y = 0.95;
+scene.add(wellBody);
+
+const rim = new THREE.Mesh(
+  new THREE.TorusGeometry(7.05, 0.52, 28, 128),
+  new THREE.MeshStandardMaterial({ color: 0x4d493f, roughness: 0.64, metalness: 0.08 }),
+);
+rim.rotation.x = Math.PI / 2;
+rim.position.y = 2.08;
+scene.add(rim);
+
+const rimGlow = new THREE.Mesh(
+  new THREE.TorusGeometry(5.95, 0.1, 18, 128),
+  new THREE.MeshBasicMaterial({ color: 0xd0bb89, transparent: true, opacity: 0.16 }),
+);
+rimGlow.rotation.x = Math.PI / 2;
+rimGlow.position.y = 1.88;
+scene.add(rimGlow);
+
+const shaftWall = new THREE.Mesh(
+  new THREE.CylinderGeometry(5.9, 6.2, 70, 128, 1, true),
+  new THREE.MeshStandardMaterial({
+    color: 0x07090d,
+    roughness: 0.98,
     side: THREE.DoubleSide,
   }),
 );
-innerPit.position.y = -3.2;
-pitGroup.add(innerPit);
+shaftWall.position.y = -33;
+scene.add(shaftWall);
 
-const pitCore = new THREE.Mesh(
-  new THREE.SphereGeometry(1.4, 24, 24),
-  new THREE.MeshBasicMaterial({ color: 0x82b5ff, transparent: true, opacity: 0.28 }),
+const shaftGlow = new THREE.Mesh(
+  new THREE.CylinderGeometry(2.6, 3.8, 56, 64),
+  new THREE.MeshBasicMaterial({ color: 0x6b91c1, transparent: true, opacity: 0.14 }),
 );
-pitCore.position.y = -2.2;
-pitGroup.add(pitCore);
+shaftGlow.position.y = -28;
+scene.add(shaftGlow);
 
-for (let i = 0; i < 10; i += 1) {
-  const angle = (i / 10) * Math.PI * 2;
+const water = new THREE.Mesh(
+  new THREE.CircleGeometry(3.4, 72),
+  new THREE.MeshBasicMaterial({ color: 0x486d9d, transparent: true, opacity: 0.16 }),
+);
+water.rotation.x = -Math.PI / 2;
+water.position.y = -58;
+scene.add(water);
+
+function addForegroundStone(x, y, z, w, h, d, rotY = 0) {
   const stone = new THREE.Mesh(
-    new THREE.BoxGeometry(1.2 + Math.random() * 0.9, 3 + Math.random() * 5, 1.2 + Math.random() * 0.9),
-    new THREE.MeshStandardMaterial({ color: 0x182030, roughness: 0.96 }),
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshStandardMaterial({ color: 0x242b35, roughness: 0.96 }),
   );
-  const radius = 11 + Math.random() * 10;
-  stone.position.set(Math.cos(angle) * radius, 1.4 + Math.random() * 2.8, Math.sin(angle) * radius);
-  stone.rotation.y = angle + Math.random();
+  stone.position.set(x, y, z);
+  stone.rotation.y = rotY;
   scene.add(stone);
 }
 
-const starsGeo = new THREE.BufferGeometry();
-const starPositions = [];
-for (let i = 0; i < 900; i += 1) {
-  const angle = Math.random() * Math.PI * 2;
-  const radius = 8 + Math.random() * 80;
-  starPositions.push(Math.cos(angle) * radius, Math.random() * 26 + 2, Math.sin(angle) * radius);
+addForegroundStone(-9.4, 0.75, 8.8, 8.4, 1.5, 3.6, -0.34);
+addForegroundStone(9.1, 0.75, 8.7, 7.6, 1.35, 3.3, 0.28);
+addForegroundStone(0, 0.42, -12.5, 10.4, 0.84, 6.4, 0.12);
+
+const chainGroup = new THREE.Group();
+scene.add(chainGroup);
+
+for (let i = 0; i < 18; i += 1) {
+  const link = new THREE.Mesh(
+    new THREE.TorusGeometry(0.16, 0.03, 8, 18),
+    new THREE.MeshStandardMaterial({ color: 0x3d3a34, roughness: 0.74, metalness: 0.18 }),
+  );
+  link.rotation.x = Math.PI / 2;
+  link.rotation.y = i % 2 === 0 ? 0 : Math.PI / 2;
+  link.position.set(-3.9, 3.6 - i * 0.52, 3.7);
+  chainGroup.add(link);
 }
-starsGeo.setAttribute("position", new THREE.Float32BufferAttribute(starPositions, 3));
-const stars = new THREE.Points(
-  starsGeo,
-  new THREE.PointsMaterial({ color: 0x91aef7, size: 0.09, transparent: true, opacity: 0.65 }),
+
+const lanternLightA = new THREE.PointLight(0xbd8259, 0.92, 8, 2.3);
+lanternLightA.position.set(-5.4, 2.2, 6.2);
+scene.add(lanternLightA);
+
+const lanternLightB = new THREE.PointLight(0xc1875d, 0.88, 8, 2.3);
+lanternLightB.position.set(5.7, 2.2, 6.5);
+scene.add(lanternLightB);
+
+const lanternBulbA = new THREE.Mesh(
+  new THREE.SphereGeometry(0.22, 14, 14),
+  new THREE.MeshBasicMaterial({ color: 0xf1bc89, transparent: true, opacity: 0.62 }),
 );
-scene.add(stars);
+lanternBulbA.position.copy(lanternLightA.position);
+scene.add(lanternBulbA);
+
+const lanternBulbB = lanternBulbA.clone();
+lanternBulbB.position.copy(lanternLightB.position);
+scene.add(lanternBulbB);
+
+const stars = [];
+for (let i = 0; i < 34; i += 1) {
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.03 + Math.random() * 0.025, 8, 8),
+    new THREE.MeshBasicMaterial({
+      color: Math.random() > 0.55 ? 0xc1875d : 0x8fb0d7,
+      transparent: true,
+      opacity: 0.32 + Math.random() * 0.2,
+    }),
+  );
+  dot.position.set((Math.random() - 0.5) * 20, 1 + Math.random() * 7, 1 + Math.random() * 8);
+  dot.userData = {
+    angle: Math.random() * Math.PI * 2,
+    radius: 0.6 + Math.random() * 1.4,
+    speed: 0.25 + Math.random() * 0.45,
+    anchorX: dot.position.x,
+    anchorY: dot.position.y,
+    anchorZ: dot.position.z,
+  };
+  scene.add(dot);
+  stars.push(dot);
+}
 
 const rippleMeshes = [];
-function addRipple(color = 0x7eb0ff) {
+const risingSprites = [];
+
+function addRipple(color = 0x8eb1db, speed = 1.25, opacity = 0.5) {
   const ring = new THREE.Mesh(
-    new THREE.TorusGeometry(4.9, 0.11, 12, 48),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.72 }),
+    new THREE.TorusGeometry(5.98, 0.11, 14, 128),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity }),
   );
   ring.rotation.x = Math.PI / 2;
-  ring.position.y = 0.08;
-  ring.userData.life = 0;
+  ring.position.y = 1.9;
+  ring.userData = { life: 0, speed };
   scene.add(ring);
   rippleMeshes.push(ring);
 }
 
-function makeLabelSprite(text) {
+function makeSpriteTexture(text) {
   const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 128;
+  canvas.width = 1024;
+  canvas.height = 256;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = "rgba(5,10,18,0.75)";
-  roundRect(ctx, 12, 18, canvas.width - 24, canvas.height - 36, 24);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(135,183,255,0.42)";
-  ctx.lineWidth = 2;
-  roundRect(ctx, 12, 18, canvas.width - 24, canvas.height - 36, 24);
-  ctx.stroke();
-  ctx.fillStyle = "#eef4ff";
-  ctx.font = "600 48px Cinzel";
+  ctx.font = "600 108px Cormorant Garamond";
+  ctx.fillStyle = "rgba(240,236,226,0.96)";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(text, canvas.width / 2, canvas.height / 2);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
+  return new THREE.CanvasTexture(canvas);
+}
+
+function spawnRisingEcho(text) {
+  const texture = makeSpriteTexture(text);
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(5.8, 1.45, 1);
-  return sprite;
+  sprite.scale.set(5.4, 1.24, 1);
+  sprite.position.set((Math.random() - 0.5) * 0.8, -34 - Math.random() * 12, (Math.random() - 0.5) * 0.8);
+  sprite.material.opacity = 0;
+  sprite.userData = {
+    life: 0,
+    driftX: (Math.random() - 0.5) * 0.24,
+    driftZ: (Math.random() - 0.5) * 0.24,
+  };
+  scene.add(sprite);
+  risingSprites.push(sprite);
 }
 
-function roundRect(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
+function showFallingWord(text) {
+  const el = document.createElement("div");
+  el.className = "falling-word";
+  el.textContent = text;
+  ui.wordLayer.appendChild(el);
+  setTimeout(() => el.remove(), 2000);
 }
 
-const wisps = [];
-
-async function createWisp() {
-  try {
-    const res = await fetch("/echo/random");
-    if (!res.ok) {
-      return null;
-    }
-    const data = await res.json();
-    const group = new THREE.Group();
-    const orb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.36, 20, 20),
-      new THREE.MeshBasicMaterial({ color: 0xb4d0ff, transparent: true, opacity: 0.92 }),
-    );
-    const halo = new THREE.Mesh(
-      new THREE.SphereGeometry(0.65, 20, 20),
-      new THREE.MeshBasicMaterial({ color: 0x71a4ff, transparent: true, opacity: 0.18 }),
-    );
-    const label = makeLabelSprite(data.word);
-    label.position.y = 1.05;
-    group.add(halo, orb, label);
-    const angle = Math.random() * Math.PI * 2;
-    const radius = 8.5 + Math.random() * 11.5;
-    group.position.set(Math.cos(angle) * radius, 1 + Math.random() * 2.2, Math.sin(angle) * radius);
-    group.userData = {
-      word: data.word,
-      frequency: data.frequency || 0,
-      angle,
-      radius,
-      speed: 0.22 + Math.random() * 0.28,
-      phase: Math.random() * Math.PI * 2,
-      consumed: false,
-    };
-    scene.add(group);
-    wisps.push(group);
-    return group;
-  } catch {
-    return null;
+function showRisingWord(text, warm = false) {
+  const el = document.createElement("div");
+  el.className = "rising-word";
+  el.textContent = text;
+  if (warm) {
+    el.style.color = "rgba(244,227,185,0.14)";
+    el.style.textShadow = "0 0 34px rgba(204,177,124,0.22)";
   }
-}
-
-async function ensureWisps() {
-  const needed = WISP_COUNT - wisps.filter((w) => !w.userData.consumed).length;
-  const tasks = [];
-  for (let i = 0; i < needed; i += 1) {
-    tasks.push(createWisp());
-  }
-  await Promise.all(tasks);
-}
-
-function calcPoints(word, freq) {
-  const rarity = freq > 0 ? Math.max(1, Math.round(500 / Math.log10(freq + 2))) : 100;
-  const len = Math.max(0, (word.length - 3) * 3);
-  const strk = Math.floor(streak * 2);
-  return { rarity, len, strk, total: rarity + len + strk };
-}
-
-function updateScore() {
-  ui.score.textContent = String(score);
-  ui.streak.textContent = String(streak);
-  ui.high.textContent = String(highScore);
+  ui.wordLayer.appendChild(el);
+  setTimeout(() => el.remove(), 4200);
 }
 
 function showToast(text, negative = false) {
@@ -263,6 +280,16 @@ function showToast(text, negative = false) {
   setTimeout(() => el.remove(), 2800);
 }
 
+function addHistory(word) {
+  const chip = document.createElement("span");
+  chip.className = "history-chip";
+  chip.textContent = word;
+  ui.history.appendChild(chip);
+  while (ui.history.children.length > 8) {
+    ui.history.removeChild(ui.history.firstChild);
+  }
+}
+
 function setStatus(text, prompt = ui.prompt.textContent) {
   ui.status.textContent = text;
   ui.prompt.textContent = prompt;
@@ -270,15 +297,36 @@ function setStatus(text, prompt = ui.prompt.textContent) {
 
 function setContext(before, word, after) {
   const pieces = [before, word ? `<strong>${word}</strong>` : "", after].filter(Boolean);
-  ui.context.innerHTML = pieces.length ? pieces.join(" ").trim() : "";
+  ui.context.innerHTML = pieces.length ? pieces.join(" ").trim() : "Nog geen stem uit de diepte ontvangen.";
+}
+
+function calcPoints(word, freq) {
+  const rarity = freq > 0 ? Math.max(1, Math.round(500 / Math.log10(freq + 2))) : 100;
+  const len = Math.max(0, (word.length - 3) * 3);
+  const strk = Math.floor(state.streak * 2);
+  return { total: rarity + len + strk };
+}
+
+function updateScore() {
+  ui.score.textContent = String(state.score);
+  ui.streak.textContent = String(state.streak);
+  ui.high.textContent = String(state.highScore);
+}
+
+function breakStreak() {
+  if (state.streak > 0) {
+    showToast(`streak ${state.streak}x gebroken`, true);
+  }
+  state.streak = 0;
+  updateScore();
 }
 
 function playBlob(blob) {
-  if (currentAudioUrl) {
-    URL.revokeObjectURL(currentAudioUrl);
+  if (state.currentAudioUrl) {
+    URL.revokeObjectURL(state.currentAudioUrl);
   }
-  currentAudioUrl = URL.createObjectURL(blob);
-  playerAudio.src = currentAudioUrl;
+  state.currentAudioUrl = URL.createObjectURL(blob);
+  playerAudio.src = state.currentAudioUrl;
   playerAudio.play().catch(() => {});
 }
 
@@ -286,173 +334,169 @@ function playTransientBlob(blob, delay = 0, volume = 1) {
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   audio.volume = volume;
-  setTimeout(() => {
-    audio.play().catch(() => {});
-  }, delay);
+  setTimeout(() => audio.play().catch(() => {}), delay);
   audio.onended = () => URL.revokeObjectURL(url);
 }
 
-function pulsePit(color = 0x87b7ff) {
-  glow.color.setHex(color);
-  glow.intensity = 5.2;
-  pitCore.material.opacity = 0.55;
-  addRipple(color);
+function pulseWell(color = 0x8eb1db, strong = false) {
+  pitLight.color.setHex(color);
+  pitLight.intensity = strong ? 7.8 : 6.8;
+  shaftGlow.material.opacity = strong ? 0.24 : 0.18;
+  rimGlow.material.opacity = strong ? 0.4 : 0.28;
+  addRipple(color, strong ? 1.55 : 1.25, strong ? 0.58 : 0.48);
+  addRipple(color, strong ? 1.9 : 1.5, strong ? 0.42 : 0.34);
   setTimeout(() => {
-    glow.color.setHex(0x6aa7ff);
-    glow.intensity = 3.1;
-    pitCore.material.opacity = 0.28;
-  }, 450);
+    pitLight.color.setHex(0x79a2d4);
+    pitLight.intensity = 5.6;
+    shaftGlow.material.opacity = 0.14;
+    rimGlow.material.opacity = 0.16;
+  }, 640);
 }
 
-function breakStreak() {
-  if (streak > 0) {
-    showToast(`streak ${streak}x gebroken`, true);
+function ensureAmbience() {
+  if (!state.musicEnabled || state.musicStarted) {
+    return;
   }
-  streak = 0;
-  updateScore();
+  state.musicStarted = true;
+  ambienceAudio.currentTime = 0;
+  ambienceAudio.volume = 0;
+  ambienceAudio.play().then(() => {
+    musicBtn.classList.add("active");
+    let volume = 0;
+    const timer = setInterval(() => {
+      volume = Math.min(0.18, volume + 0.02);
+      ambienceAudio.volume = volume;
+      if (volume >= 0.18) {
+        clearInterval(timer);
+      }
+    }, 150);
+  }).catch(() => {
+    state.musicStarted = false;
+    showToast("muziek kon niet starten", true);
+  });
 }
 
-async function queryEcho(query, options = {}) {
+function setMusic(enabled) {
+  state.musicEnabled = enabled;
+  if (!enabled) {
+    ambienceAudio.pause();
+    ambienceAudio.currentTime = 0;
+    state.musicStarted = false;
+    musicBtn.classList.remove("active");
+    return;
+  }
+  ensureAmbience();
+}
+
+async function fetchEchoVariant(query, variant) {
+  const response = await fetch(`/echo/api?word=${encodeURIComponent(query)}&v=${variant}&echo=${state.echoLevel}`, {
+    signal: state.activeController.signal,
+  });
+  if (!response.ok) {
+    return null;
+  }
+  return {
+    blob: await response.blob(),
+    freq: parseInt(response.headers.get("X-Word-Frequency") || "0", 10),
+    matched: response.headers.get("X-Word-Matched") || query,
+    before: decodeURIComponent(response.headers.get("X-Context-Before") || ""),
+    after: decodeURIComponent(response.headers.get("X-Context-After") || ""),
+  };
+}
+
+async function queryEcho(query) {
   if (!query) {
     return;
   }
-  if (activeController) {
-    activeController.abort();
+  ensureAmbience();
+
+  if (state.activeController) {
+    state.activeController.abort();
   }
-  activeController = new AbortController();
-  input.value = "";
-  setStatus(`zoeken naar "${query}"`, "de put luistert naar je roep");
+  state.activeController = new AbortController();
+  wordInput.value = "";
+
+  showFallingWord(query);
+  addRipple(0xccb17c, 1.05, 0.54);
+  ui.ritualLine.textContent = `"${query}" valt omlaag, wordt klein, en raakt het water ver beneden.`;
+  setStatus(`"${query}" valt`, "luister naar de tijd tussen offer en antwoord");
   setContext("", "", "");
 
-  const variant = Math.floor(Math.random() * 4);
-  const url = `/echo/api?word=${encodeURIComponent(query)}&v=${variant}&echo=${echoLevel}`;
-
   try {
-    if (multiMode) {
-      const results = await Promise.allSettled(
-        [0, 1, 2].map((v) =>
-          fetch(`/echo/api?word=${encodeURIComponent(query)}&v=${v}&echo=${echoLevel}`, {
-            signal: activeController.signal,
-          }),
-        ),
-      );
-      const ok = [];
-      for (const item of results) {
-        if (item.status !== "fulfilled" || !item.value.ok) {
-          continue;
-        }
-        const response = item.value;
-        const blob = await response.blob();
-        ok.push({
-          blob,
-          freq: parseInt(response.headers.get("X-Word-Frequency") || "0", 10),
-          matched: response.headers.get("X-Word-Matched") || query,
-          before: decodeURIComponent(response.headers.get("X-Context-Before") || ""),
-          after: decodeURIComponent(response.headers.get("X-Context-After") || ""),
-        });
-      }
-      if (!ok.length) {
+    if (state.multiMode) {
+      const settled = await Promise.allSettled([0, 1, 2].map((variant) => fetchEchoVariant(query, variant)));
+      const results = settled.filter((x) => x.status === "fulfilled" && x.value).map((x) => x.value);
+
+      if (!results.length) {
         breakStreak();
-        pulsePit(0xc77070);
-        setStatus(`"${query}" rust hier niet`, "kies een ander woord of zoek een nieuw fluisterlicht");
+        pulseWell(0xc87472, true);
+        setStatus(`"${query}" verdwijnt`, "de put houdt dit woord voor zichzelf");
+        ui.ritualLine.textContent = "Er stijgt niets op. Alleen een late druppel keert terug.";
+        showToast("geen echo gevonden", true);
         return;
       }
-      const first = ok[0];
-      for (const [index, item] of ok.entries()) {
-        playTransientBlob(item.blob, index * 1150, Math.max(0.32, 1 - index * 0.22));
-      }
-      streak += 1;
-      const pts = calcPoints(first.matched, first.freq);
-      score += pts.total;
-      if (score > highScore) {
-        highScore = score;
-        localStorage.setItem("grafstemming_3d_hs", String(highScore));
+
+      const first = results[0];
+      results.forEach((item, index) => {
+        playTransientBlob(item.blob, index * 1180, Math.max(0.28, 1 - index * 0.2));
+        setTimeout(() => {
+          spawnRisingEcho(item.matched);
+          showRisingWord(item.matched, true);
+        }, 440 + index * 280);
+      });
+
+      state.streak += 1;
+      const points = calcPoints(first.matched, first.freq);
+      state.score += points.total;
+      if (state.score > state.highScore) {
+        state.highScore = state.score;
+        localStorage.setItem("grafstemming_3d_hs", String(state.highScore));
       }
       updateScore();
-      showToast(`+${pts.total} drievoudige echo`);
-      setStatus(`${ok.length} echo's van "${first.matched}"`, "zoek verder of typ een nieuwe bezwering");
+      addHistory(first.matched);
+      setStatus(`drie echo's stijgen op`, `drie stemmen wonen op verschillende dieptes`);
       setContext(first.before, first.matched, first.after);
-      pulsePit(0xd8be6f);
-      if (options.consumeWisp) {
-        consumeWisp(options.consumeWisp);
-      }
+      ui.ritualLine.textContent = `Meerdere echo's klimmen na elkaar omhoog en laten "${first.matched}" langs de stenen glijden.`;
+      pulseWell(0xccb17c, true);
+      showToast(`+${points.total} drievoudige echo`);
       return;
     }
 
-    const res = await fetch(url, { signal: activeController.signal });
-    if (!res.ok) {
+    const variant = Math.floor(Math.random() * 4);
+    const result = await fetchEchoVariant(query, variant);
+    if (!result) {
       breakStreak();
-      pulsePit(0xc77070);
-      setStatus(`"${query}" rust hier niet`, "loop naar een nieuw licht of probeer een ander woord");
+      pulseWell(0xc87472, true);
+      setStatus(`"${query}" verdwijnt`, "de put houdt dit woord voor zichzelf");
+      ui.ritualLine.textContent = "Er stijgt niets op. Alleen een late druppel keert terug.";
       showToast("geen echo gevonden", true);
       return;
     }
-    const matched = res.headers.get("X-Word-Matched") || query;
-    const freq = parseInt(res.headers.get("X-Word-Frequency") || "0", 10);
-    const before = decodeURIComponent(res.headers.get("X-Context-Before") || "");
-    const after = decodeURIComponent(res.headers.get("X-Context-After") || "");
-    const blob = await res.blob();
-    playBlob(blob);
-    streak += 1;
-    const pts = calcPoints(matched, freq);
-    score += pts.total;
-    if (score > highScore) {
-      highScore = score;
-      localStorage.setItem("grafstemming_3d_hs", String(highScore));
+
+    playBlob(result.blob);
+    state.streak += 1;
+    const points = calcPoints(result.matched, result.freq);
+    state.score += points.total;
+    if (state.score > state.highScore) {
+      state.highScore = state.score;
+      localStorage.setItem("grafstemming_3d_hs", String(state.highScore));
     }
     updateScore();
-    showToast(`+${pts.total} ${matched}`);
-    setStatus(`echo van "${matched}"`, `frequentie in archief: ${freq || "onbekend"}`);
-    setContext(before, matched, after);
-    pulsePit();
-    if (options.consumeWisp) {
-      consumeWisp(options.consumeWisp);
-    }
+    addHistory(result.matched);
+    setStatus(`echo van "${result.matched}"`, "de diepte geeft het woord terug");
+    setContext(result.before, result.matched, result.after);
+    ui.ritualLine.textContent = `Vanuit de donkere schacht kruipt "${result.matched}" weer omhoog.`;
+    pulseWell();
+    spawnRisingEcho(result.matched);
+    showRisingWord(result.matched);
+    showToast(`+${points.total} ${result.matched}`);
   } catch (error) {
     if (error.name === "AbortError") {
       return;
     }
-    setStatus("geen verbinding", "de 3D-ruimte bleef staan, maar de echo-service reageert niet");
+    setStatus("de put zwijgt", "het archief reageert niet");
+    ui.ritualLine.textContent = "Je hoort wel de schacht, maar geen stem bereikt de rand.";
     showToast("verbinding verbroken", true);
-  }
-}
-
-function consumeWisp(wisp) {
-  wisp.userData.consumed = true;
-  wisp.visible = false;
-  setTimeout(() => {
-    scene.remove(wisp);
-    const index = wisps.indexOf(wisp);
-    if (index >= 0) {
-      wisps.splice(index, 1);
-    }
-    ensureWisps();
-  }, 120);
-}
-
-function nearestVisibleWisp() {
-  let best = null;
-  let bestDist = Infinity;
-  for (const wisp of wisps) {
-    if (wisp.userData.consumed) {
-      continue;
-    }
-    const dist = wisp.position.distanceTo(player.position);
-    if (dist < bestDist) {
-      best = wisp;
-      bestDist = dist;
-    }
-  }
-  return { wisp: best, distance: bestDist };
-}
-
-function updatePrompt() {
-  const { wisp, distance } = nearestVisibleWisp();
-  nearestWisp = distance < 4.4 ? wisp : null;
-  if (nearestWisp) {
-    ui.prompt.textContent = `druk E om "${nearestWisp.userData.word}" te roepen`;
-  } else {
-    ui.prompt.textContent = "verken de cirkel, nader een fluisterlicht of typ een woord";
   }
 }
 
@@ -464,85 +508,90 @@ function onResize() {
 
 window.addEventListener("resize", onResize);
 
+window.addEventListener("pointermove", (event) => {
+  state.pointerX = (event.clientX / window.innerWidth - 0.5) * 2;
+  state.pointerY = (event.clientY / window.innerHeight - 0.5) * 2;
+});
+
+window.addEventListener("pointerdown", () => {
+  ensureAmbience();
+});
+
 window.addEventListener("keydown", (event) => {
-  if (event.target === input) {
+  if (event.target === wordInput) {
     if (event.key === "Enter") {
-      queryEcho(input.value.trim());
+      queryEcho(wordInput.value.trim());
     }
     return;
   }
-  keys.add(event.key.toLowerCase());
-  if (event.key.toLowerCase() === "e" && nearestWisp) {
-    queryEcho(nearestWisp.userData.word, { consumeWisp: nearestWisp });
-  }
+  ensureAmbience();
 });
 
-window.addEventListener("keyup", (event) => {
-  keys.delete(event.key.toLowerCase());
-});
+sendBtn.addEventListener("click", () => queryEcho(wordInput.value.trim()));
 
-renderer.domElement.addEventListener("mousedown", () => {
-  mouseDown = true;
-});
-
-window.addEventListener("mouseup", () => {
-  mouseDown = false;
-});
-
-window.addEventListener("mousemove", (event) => {
-  if (!mouseDown) {
-    return;
-  }
-  player.yaw -= event.movementX * 0.004;
-  player.pitch = THREE.MathUtils.clamp(player.pitch - event.movementY * 0.0035, -0.9, 0.45);
-});
-
-sendBtn.addEventListener("click", () => queryEcho(input.value.trim()));
 randomBtn.addEventListener("click", async () => {
+  ensureAmbience();
   try {
     const res = await fetch("/echo/random");
     const data = await res.json();
     queryEcho(data.word);
   } catch {
-    showToast("geen willekeurig woord", true);
+    showToast("geen orakelwoord", true);
   }
 });
 
 multiBtn.addEventListener("click", () => {
-  multiMode = !multiMode;
-  multiBtn.classList.toggle("active", multiMode);
-  multiBtn.textContent = `drievoudige echo: ${multiMode ? "aan" : "uit"}`;
+  state.multiMode = !state.multiMode;
+  multiBtn.textContent = `drievoudige echo: ${state.multiMode ? "aan" : "uit"}`;
+  multiBtn.classList.toggle("active", state.multiMode);
+  ui.ritualLine.textContent = state.multiMode
+    ? "De put staat nu open voor drie antwoorden tegelijk."
+    : "De put antwoordt weer met een enkele stem.";
 });
 
 for (const button of document.querySelectorAll("#echo-levels button")) {
   button.addEventListener("click", () => {
-    echoLevel = parseInt(button.dataset.level || "2", 10);
-    for (const b of document.querySelectorAll("#echo-levels button")) {
-      b.classList.toggle("active", b === button);
+    state.echoLevel = parseInt(button.dataset.level || "2", 10);
+    for (const el of document.querySelectorAll("#echo-levels button")) {
+      el.classList.toggle("active", el === button);
     }
+    ui.ritualLine.textContent = `Echo-instelling veranderd naar ${button.textContent}.`;
   });
 }
 
+musicBtn.addEventListener("click", () => {
+  setMusic(!state.musicEnabled);
+});
+
+collapseBtn.addEventListener("click", () => {
+  state.collapsed = !state.collapsed;
+  body.classList.toggle("chrome-collapsed", state.collapsed);
+  collapseBtn.classList.toggle("active", state.collapsed);
+  ui.ritualLine.textContent = state.collapsed
+    ? "De grote vensters zijn weg. Alleen de rite blijft over."
+    : "De vensters zijn terug. De put blijft onveranderd luisteren.";
+});
+
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recognition = null;
+
 if (SR) {
   recognition = new SR();
   recognition.lang = "nl-NL";
   recognition.interimResults = false;
   recognition.maxAlternatives = 1;
   recognition.onresult = (event) => {
-    listening = false;
+    state.listening = false;
     micBtn.classList.remove("active");
-    const spoken = event.results[0][0].transcript.trim();
-    queryEcho(spoken);
+    queryEcho(event.results[0][0].transcript.trim());
   };
   recognition.onerror = () => {
-    listening = false;
+    state.listening = false;
     micBtn.classList.remove("active");
     showToast("spraak niet verstaan", true);
   };
   recognition.onend = () => {
-    listening = false;
+    state.listening = false;
     micBtn.classList.remove("active");
   };
 } else {
@@ -550,90 +599,81 @@ if (SR) {
 }
 
 micBtn.addEventListener("click", () => {
+  ensureAmbience();
   if (!recognition) {
     return;
   }
-  if (listening) {
+  if (state.listening) {
     recognition.stop();
     return;
   }
-  listening = true;
+  state.listening = true;
   micBtn.classList.add("active");
   recognition.start();
-  setStatus("luisteren...", "spreek een woord of korte zin in");
+  ui.ritualLine.textContent = "Je stem zakt de schacht in. Wacht op wat ervan terugkeert.";
 });
 
 function animate() {
   requestAnimationFrame(animate);
+  const elapsed = clock.getElapsedTime();
   const dt = Math.min(clock.getDelta(), 0.03);
 
-  const forward = (keys.has("w") || keys.has("arrowup") ? 1 : 0) - (keys.has("s") || keys.has("arrowdown") ? 1 : 0);
-  const strafe = (keys.has("d") || keys.has("arrowright") ? 1 : 0) - (keys.has("a") || keys.has("arrowleft") ? 1 : 0);
-  const direction = new THREE.Vector3();
-  if (forward || strafe) {
-    const moveAngle = player.yaw + Math.atan2(strafe, forward);
-    direction.set(Math.sin(moveAngle), 0, Math.cos(moveAngle));
-    player.position.addScaledVector(direction, PLAYER_SPEED * dt);
-  }
+  state.smoothX += (state.pointerX - state.smoothX) * 0.04;
+  state.smoothY += (state.pointerY - state.smoothY) * 0.04;
 
-  const planar = new THREE.Vector2(player.position.x, player.position.z);
-  if (planar.length() > ARENA_RADIUS - 2.5) {
-    planar.setLength(ARENA_RADIUS - 2.5);
-    player.position.x = planar.x;
-    player.position.z = planar.y;
-  }
+  camera.position.set(state.smoothX * 0.8, 4.9 + state.smoothY * 0.25, 12.6 + state.smoothY * 0.1);
+  camera.lookAt(state.smoothX * 0.36, -18.5 + state.smoothY * -1.2, 0);
 
-  player.bob += (forward || strafe ? 10 : 3) * dt;
-  camera.position.set(
-    player.position.x,
-    PLAYER_HEIGHT + Math.sin(player.bob) * (forward || strafe ? 0.06 : 0.02),
-    player.position.z,
-  );
-  camera.rotation.order = "YXZ";
-  camera.rotation.y = player.yaw;
-  camera.rotation.x = player.pitch;
+  pitLight.position.x = Math.sin(elapsed * 0.42) * 0.18;
+  pitLight.position.z = Math.cos(elapsed * 0.38) * 0.18;
+  shaftGlow.scale.x = 1 + Math.sin(elapsed * 1.1) * 0.03;
+  shaftGlow.scale.z = 1 + Math.cos(elapsed * 1.2) * 0.03;
+  water.material.opacity = 0.14 + Math.sin(elapsed * 1.6) * 0.025;
+  rimGlow.rotation.z += dt * 0.035;
+  chainGroup.rotation.z = Math.sin(elapsed * 0.34) * 0.03;
+  lanternLightA.intensity = 0.9 + Math.sin(elapsed * 2.5) * 0.11;
+  lanternLightB.intensity = 0.88 + Math.cos(elapsed * 2.2) * 0.11;
 
-  const focus = new THREE.Vector3(
-    player.position.x + Math.sin(player.yaw) * 10,
-    PLAYER_HEIGHT + Math.sin(player.pitch) * 4,
-    player.position.z + Math.cos(player.yaw) * 10,
-  );
-  camera.lookAt(focus);
-
-  const elapsed = clock.elapsedTime;
-  pitCore.position.y = -2.2 + Math.sin(elapsed * 1.3) * 0.12;
-  rim.rotation.z = Math.sin(elapsed * 0.2) * 0.015;
-  stars.rotation.y += dt * 0.012;
-
-  for (const wisp of wisps) {
-    if (wisp.userData.consumed) {
-      continue;
-    }
-    wisp.userData.angle += dt * wisp.userData.speed;
-    const offset = Math.sin(elapsed * 1.6 + wisp.userData.phase) * 0.35;
-    wisp.position.x = Math.cos(wisp.userData.angle) * wisp.userData.radius;
-    wisp.position.z = Math.sin(wisp.userData.angle) * wisp.userData.radius;
-    wisp.position.y = 1.4 + offset;
-    wisp.children[0].scale.setScalar(1 + Math.sin(elapsed * 3 + wisp.userData.phase) * 0.08);
-    wisp.children[1].scale.setScalar(1 + Math.sin(elapsed * 2.2 + wisp.userData.phase) * 0.14);
-    wisp.children[2].quaternion.copy(camera.quaternion);
-  }
+  stars.forEach((dot) => {
+    dot.userData.angle += dt * dot.userData.speed;
+    dot.position.x = dot.userData.anchorX + Math.cos(dot.userData.angle) * dot.userData.radius;
+    dot.position.y = dot.userData.anchorY + Math.sin(dot.userData.angle * 1.7) * 0.16;
+    dot.position.z = dot.userData.anchorZ + Math.sin(dot.userData.angle) * dot.userData.radius;
+  });
 
   for (const ring of [...rippleMeshes]) {
-    ring.userData.life += dt;
-    ring.scale.setScalar(1 + ring.userData.life * 3.2);
-    ring.material.opacity = Math.max(0, 0.74 - ring.userData.life * 0.72);
-    if (ring.userData.life > 1.2) {
+    ring.userData.life += dt * ring.userData.speed;
+    const scale = 1 + ring.userData.life * 1.62;
+    ring.scale.set(scale, 1, scale);
+    ring.position.y = 1.9 - ring.userData.life * 0.12;
+    ring.material.opacity = Math.max(0, ring.material.opacity - dt * 0.4);
+    if (ring.userData.life > 1.7) {
       scene.remove(ring);
       rippleMeshes.splice(rippleMeshes.indexOf(ring), 1);
     }
   }
 
-  updatePrompt();
+  for (const sprite of [...risingSprites]) {
+    sprite.userData.life += dt;
+    sprite.position.y += dt * 6;
+    sprite.position.x += sprite.userData.driftX * dt;
+    sprite.position.z += sprite.userData.driftZ * dt;
+    sprite.material.opacity = sprite.userData.life < 0.9
+      ? sprite.userData.life
+      : Math.max(0, 1 - (sprite.userData.life - 0.9) / 2.6);
+    sprite.scale.multiplyScalar(1 + dt * 0.04);
+    sprite.quaternion.copy(camera.quaternion);
+    if (sprite.userData.life > 3.5) {
+      scene.remove(sprite);
+      risingSprites.splice(risingSprites.indexOf(sprite), 1);
+    }
+  }
+
   renderer.render(scene, camera);
 }
 
-ensureWisps();
 updateScore();
-setStatus("de put luistert", "verken de cirkel, nader een fluisterlicht of typ een woord");
+setStatus("de put luistert", "Spreek of typ een woord en luister hoe de schacht het teruggeeft.");
+setContext("", "", "");
+ui.ritualLine.textContent = "Klik ergens in de scene om de ruimte te wekken. Daarna hoef je alleen nog woorden te offeren.";
 animate();

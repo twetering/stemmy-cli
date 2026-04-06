@@ -3,57 +3,70 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GRAFSTEMMING 3D</title>
+<title>Grafstemming 3D</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Manrope:wght@300;400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/echo/static/echo3d.css">
 </head>
 <body>
   <div id="scene-root"></div>
+  <div id="sky-glow"></div>
+  <div id="vignette"></div>
+  <div id="word-layer"></div>
+  <div id="toast-layer"></div>
 
   <div id="hud">
-    <div class="panel title-panel">
+    <aside class="panel story-panel hide-when-collapsed">
       <div class="eyebrow">Grafstemming 3D</div>
-      <h1>daal af in de echo-put</h1>
-      <p>Beweeg met WASD of pijltjes. Kijk rond door te slepen. Vind fluisterlichten en druk <strong>E</strong> om hun woord de diepte in te roepen.</p>
-    </div>
+      <h1>de put antwoordt</h1>
+      <p>Je staat vast aan de rand van de put, zoals in een theatrale darkride-scene. Kijk alleen mee met de ruimte, laat woorden vallen, en wacht tot hun echo's weer langs de natte stenen omhoog kruipen.</p>
+    </aside>
 
-    <div class="panel controls-panel">
-      <div class="input-row">
-        <button id="mic-btn" class="icon-btn" title="Spreek">🎙</button>
-        <input id="word-input" type="text" placeholder="roep een woord of zin..." autocomplete="off" spellcheck="false">
-        <button id="send-btn" class="action-btn">roep</button>
+    <aside class="panel status-panel hide-when-collapsed">
+      <div class="eyebrow">Uit De Diepte</div>
+      <h2 id="status">de put luistert</h2>
+      <p id="prompt">Spreek of typ een woord en luister hoe de schacht het teruggeeft.</p>
+      <div id="context">Nog geen stem uit de diepte ontvangen.</div>
+      <div id="history"></div>
+    </aside>
+
+    <aside class="panel score-panel hide-when-collapsed">
+      <div class="score-box"><span>score</span><strong id="score-val">0</strong></div>
+      <div class="score-box"><span>streak</span><strong id="streak-val">0</strong></div>
+      <div class="score-box"><span>beste</span><strong id="highscore-val">0</strong></div>
+    </aside>
+
+    <div id="dock" class="panel">
+      <div class="dock-toolbar">
+        <button id="music-btn" class="chrome-btn" title="Muziek aan of uit">♪</button>
+        <button id="collapse-btn" class="chrome-btn" title="Vensters inklappen">☷</button>
+        <button id="random-btn" class="chrome-btn wide-btn" title="Willekeurig woord">orakelwoord</button>
+        <button id="multi-btn" class="chrome-btn wide-btn" title="Drie echo's tegelijk">drievoudige echo: uit</button>
       </div>
-      <div class="button-row">
-        <button id="random-btn" class="ghost-btn">willekeurig</button>
-        <button id="multi-btn" class="ghost-btn">drievoudige echo: uit</button>
+
+      <div class="dock-input">
+        <button id="mic-btn" class="chrome-btn" title="Spreek een woord">🎙</button>
+        <input id="word-input" type="text" placeholder="laat een woord in de put vallen..." autocomplete="off" spellcheck="false">
+        <button id="send-btn" class="send-btn">roep</button>
+      </div>
+
+      <div class="dock-footer">
         <div id="echo-levels" class="echo-levels">
           <button data-level="0">droog</button>
           <button data-level="1">licht</button>
           <button data-level="2" class="active">normaal</button>
-          <button data-level="3">diep</button>
+          <button data-level="3">afgrond</button>
         </div>
-        <a href="/echo" class="ghost-btn link-btn">oude versie</a>
+        <a href="/echo" class="ghost-link">2d versie</a>
       </div>
-    </div>
 
-    <div class="panel score-panel">
-      <div><span class="label">score</span><strong id="score-val">0</strong></div>
-      <div><span class="label">streak</span><strong id="streak-val">0</strong></div>
-      <div><span class="label">beste</span><strong id="highscore-val">0</strong></div>
-    </div>
-
-    <div class="panel status-panel">
-      <div id="status">de put luistert</div>
-      <div id="prompt">zoek een fluisterlicht of typ zelf een woord</div>
-      <div id="context"></div>
+      <p id="ritual-line">Klik ergens in de scene om de ruimte te wekken. Daarna hoef je alleen nog woorden te offeren.</p>
     </div>
   </div>
 
-  <div id="crosshair"></div>
-  <div id="toast-layer"></div>
   <audio id="player" preload="none"></audio>
+  <audio id="ambience" preload="auto" loop src="/echo/music/horror2.mp3"></audio>
 
   <script type="module" src="/echo/static/echo3d.js"></script>
 </body>
