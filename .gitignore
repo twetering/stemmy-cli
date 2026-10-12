@@ -63,3 +63,6 @@ Thumbs.db
 
 # video
 videos/
+
+# Supercut: woordindex en broncache (groot, lokaal te herbouwen)
+supercut/cache/
