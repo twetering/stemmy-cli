@@ -48,18 +48,18 @@ def normalize_audio_file(input_path: str, output_path: Optional[str] = None) -> 
     Returns:
         Path to normalized file
     """
-    from pydub import AudioSegment
-
-    audio = AudioSegment.from_file(input_path)
-    # Trim 1ms from end to force re-encoding and fix timing (legacy line 691)
-    audio = audio[:-1]
+    # Direct via ffmpeg i.p.v. pydub: pydub leunt op audioop, dat in Python 3.13 is verwijderd.
+    # Zelfde resultaat: 1ms van het eind (forceert her-encoderen), 192k CBR, ID3v2.3, geen Xing.
+    import subprocess
 
     out = output_path or str(Path(input_path).parent / "normalized.mp3")
-    audio.export(
-        out,
-        format="mp3",
-        bitrate=NORMALIZE_BITRATE,
-        parameters=NORMALIZE_PARAMS,
+    dur = float(subprocess.check_output(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", input_path]
+    ).decode().strip())
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-i", input_path, "-t", f"{max(0.0, dur - 0.001):.3f}",
+         "-map", "0:a:0", "-c:a", "libmp3lame", "-b:a", NORMALIZE_BITRATE, *NORMALIZE_PARAMS, out],
+        check=True,
     )
     return out
 
