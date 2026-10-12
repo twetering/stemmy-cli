@@ -442,7 +442,8 @@ class ParallelExtractor:
             )
         
         # Calculate seek positions relative to chunk
-        initial_seek = self.BUFFER_BEFORE
+        # Bij segmenten in de eerste seconden begint de chunk op byte 0: minder buffer
+        initial_seek = min(self.BUFFER_BEFORE, group_start)
         relative_start = seg_start - group_start
         
         # Output path
@@ -453,9 +454,10 @@ class ParallelExtractor:
             # Extract with ffmpeg
             cmd = [
                 'ffmpeg', '-y',
-                '-ss', f"{initial_seek:.3f}",
+                # Eén input-seek: de dubbele seek (input + output) leverde bij
+                # het 2e/3e segment uit dezelfde chunk verschoven of lege audio op
+                '-ss', f"{initial_seek + relative_start:.3f}",
                 '-i', chunk_path,
-                '-ss', f"{relative_start:.3f}",
                 '-t', f"{duration:.3f}",
                 '-c:a', 'libmp3lame', '-q:a', '2',
                 '-af', 'afade=t=in:d=0.015,afade=t=out:st={:.3f}:d=0.015'.format(duration - 0.015),

@@ -42,12 +42,15 @@ def generate_tts(
     from elevenlabs.client import ElevenLabs
 
     client = ElevenLabs(api_key=api_key)
-    audio: bytes = client.text_to_speech.convert(
+    audio = client.text_to_speech.convert(
         voice_id=voice_id,
         text=text,
         model_id=model_id,
         output_format=output_format,
     )
+    # Nieuwere SDK-versies geven een generator van chunks terug
+    if not isinstance(audio, (bytes, bytearray)):
+        audio = b"".join(audio)
 
     if output_path:
         out = Path(output_path)
