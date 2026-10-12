@@ -36,6 +36,9 @@ from dataclasses import dataclass
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Sommige podcast-hosts (o.a. beehiiv) weigeren de standaard python-requests user-agent met 403
+HTTP_HEADERS = {'User-Agent': 'stemmy-cli/1.0 (+https://github.com/twetering/stemmy-cli)'}
+
 
 @dataclass
 class ExtractionResult:
@@ -73,7 +76,8 @@ class ParallelExtractor:
     DEFAULT_METADATA = {
         'bit_rate': 128000,
         'sample_rate': 44100,
-        'bytes_per_second': 16000
+        'bytes_per_second': 16000,
+        'audio_offset': 0,
     }
 
     def __init__(
@@ -284,7 +288,7 @@ class ParallelExtractor:
                 'ffprobe', '-v', 'quiet',
                 '-select_streams', 'a:0',
                 '-show_entries', 'format=bit_rate,duration',
-                '-show_entries', 'stream=sample_rate',
+                '-show_entries', 'stream=sample_rate,bit_rate',
                 '-of', 'json',
                 url
             ]
@@ -292,13 +296,17 @@ class ParallelExtractor:
             output = subprocess.check_output(cmd, timeout=30)
             data = json.loads(output.decode('utf-8'))
             
-            bit_rate = int(data.get('format', {}).get('bit_rate', 128000))
-            sample_rate = int(data.get('streams', [{}])[0].get('sample_rate', 44100))
-            
+            stream = (data.get('streams') or [{}])[0]
+            # Stream-bitrate gaat vóór format-bitrate: die laatste wordt opgeblazen
+            # door grote ID3-tags (cover-art), wat de byte→tijd-omrekening verschuift.
+            bit_rate = int(stream.get('bit_rate') or data.get('format', {}).get('bit_rate') or 128000)
+            sample_rate = int(stream.get('sample_rate', 44100))
+
             metadata = {
                 'bit_rate': bit_rate,
                 'sample_rate': sample_rate,
-                'bytes_per_second': bit_rate // 8
+                'bytes_per_second': bit_rate // 8,
+                'audio_offset': self._id3_size(url),
             }
             
             self._metadata_cache[url] = metadata
@@ -308,6 +316,23 @@ class ParallelExtractor:
             logger.warning(f"Could not get metadata for {url}: {e}, using defaults")
             return self.DEFAULT_METADATA
     
+    @staticmethod
+    def _id3_size(url: str) -> int:
+        """
+        Grootte van een ID3v2-tag aan het begin van het bestand (0 als er geen is).
+        De audio begint pas ná de tag; zonder deze offset landen byte-ranges te vroeg
+        (bij 250KB cover-art op 128kbps: ~16 seconden).
+        """
+        try:
+            r = requests.get(url, headers={**HTTP_HEADERS, 'Range': 'bytes=0-9'}, timeout=15)
+            head = r.content[:10]
+            if len(head) == 10 and head[:3] == b'ID3':
+                size = (head[6] << 21) | (head[7] << 14) | (head[8] << 7) | head[9]
+                return 10 + size + (10 if head[5] & 0x10 else 0)
+        except Exception as e:
+            logger.warning(f"ID3-check mislukt voor {url}: {e}")
+        return 0
+
     def _create_groups(self, segments: List[Dict]) -> List[List[Dict]]:
         """Group segments that are close together for efficient downloading."""
         groups: List[List[Dict]] = []
@@ -359,19 +384,20 @@ class ParallelExtractor:
         
         # Bereken byte-range met buffers
         # BUFFER_BEFORE=8s vangt VBR-audio (Megaphone CDN) correct op
+        audio_offset = metadata.get('audio_offset', 0)
         download_start_byte = max(0, int((group_start - self.BUFFER_BEFORE) * bytes_per_second))
         download_end_byte = int((group_end + self.BUFFER_AFTER) * bytes_per_second)
-        
-        # Align to MP3 frame boundaries
+
+        # Align to MP3 frame boundaries (relatief aan het begin van de audio, ná de ID3-tag)
         frame_size = max(1, int(144 * bit_rate / sample_rate)) if sample_rate > 0 else 1
-        download_start_byte = (download_start_byte // frame_size) * frame_size
-        download_end_byte = ((download_end_byte + frame_size - 1) // frame_size) * frame_size
+        download_start_byte = audio_offset + (download_start_byte // frame_size) * frame_size
+        download_end_byte = audio_offset + ((download_end_byte + frame_size - 1) // frame_size) * frame_size
         
         chunk_path = None
         
         try:
             # Download chunk with range request
-            headers = {'Range': f'bytes={download_start_byte}-{download_end_byte}'}
+            headers = {**HTTP_HEADERS, 'Range': f'bytes={download_start_byte}-{download_end_byte}'}
             response = requests.get(audio_url, headers=headers, stream=True, timeout=60)
             
             if response.status_code not in (200, 206):
