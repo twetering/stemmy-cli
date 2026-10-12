@@ -473,6 +473,84 @@ def export_json(output_path: Path) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+def export_chart(out_path: Path) -> None:
+    """
+    Genereer een Karpathy-stijl grafiek van extraction_score over experimenten.
+    Groen = bijgehouden verbetering, grijs = verworpen, stippellijn = running best.
+    Vereist: pip install matplotlib
+    """
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+    except ImportError:
+        print("matplotlib niet geïnstalleerd. Gebruik: pip install matplotlib")
+        return
+
+    results = load_all_results()
+    if not results:
+        print("Geen experimenten om te plotten.")
+        return
+
+    baseline = load_baseline_score()
+    scores = [r.extraction_score for r in results]
+    kept = [r.extraction_score > baseline for r in results]
+    n = len(scores)
+    xs = list(range(1, n + 1))
+
+    # Running best (step line)
+    running_best = []
+    best = baseline
+    for s in scores:
+        best = max(best, s)
+        running_best.append(best)
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    fig.patch.set_facecolor("#0d1117")
+    ax.set_facecolor("#0d1117")
+
+    # Scatter: verworpen (grijs) en bijgehouden (groen)
+    disc_x = [xs[i] for i in range(n) if not kept[i]]
+    disc_y = [scores[i] for i in range(n) if not kept[i]]
+    kept_x = [xs[i] for i in range(n) if kept[i]]
+    kept_y = [scores[i] for i in range(n) if kept[i]]
+
+    ax.scatter(disc_x, disc_y, color="#555555", s=18, zorder=3, label="Verworpen")
+    ax.scatter(kept_x, kept_y, color="#3fb950", s=30, zorder=4, label="Bijgehouden")
+
+    # Baseline lijn
+    ax.axhline(baseline, color="#58a6ff", linewidth=1, linestyle="--",
+               alpha=0.6, label=f"Baseline ({baseline:.4f})")
+
+    # Running best step-lijn
+    ax.step(xs, running_best, where="post", color="#3fb950",
+            linewidth=1.5, alpha=0.8, label="Running best")
+
+    # Labels voor bijgehouden verbeteringen
+    for xi, yi in zip(kept_x, kept_y):
+        ax.annotate(f"{yi:.4f}", (xi, yi),
+                    textcoords="offset points", xytext=(4, 4),
+                    fontsize=6, color="#3fb950", alpha=0.85)
+
+    n_kept = sum(kept)
+    ax.set_title(f"Autoresearch Progress: {n} Experiments, {n_kept} Kept Improvements",
+                 color="white", fontsize=13, pad=12)
+    ax.set_xlabel("Experiment #", color="#8b949e", fontsize=10)
+    ax.set_ylabel("Extraction Score (higher = better)", color="#8b949e", fontsize=10)
+    ax.tick_params(colors="#8b949e")
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#30363d")
+
+    legend = ax.legend(facecolor="#161b22", edgecolor="#30363d",
+                       labelcolor="white", fontsize=9)
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close()
+    print(f"✓ Grafiek opgeslagen: {out_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Stemmy Benchmark Dashboard")
     parser.add_argument("--watch", action="store_true",
@@ -483,12 +561,16 @@ def main():
                         help="Exporteer HTML-rapport naar opgegeven pad")
     parser.add_argument("--export-json", type=Path, default=None,
                         help="Exporteer JSON-samenvatting naar opgegeven pad")
+    parser.add_argument("--export-chart", type=Path, default=None,
+                        help="Exporteer Karpathy-stijl PNG-grafiek (vereist matplotlib)")
     args = parser.parse_args()
 
     if args.export_html:
         export_html(args.export_html)
     elif args.export_json:
         export_json(args.export_json)
+    elif args.export_chart:
+        export_chart(args.export_chart)
     else:
         render_dashboard(watch=args.watch, refresh_sec=args.refresh)
 

@@ -20,10 +20,19 @@ from urllib.parse import parse_qs, unquote, urlparse
 ROOT      = Path(__file__).resolve().parent.parent
 CACHE_DIR = Path(__file__).resolve().parent / "cache"
 CACHE_DIR.mkdir(exist_ok=True)
+ECHO_STATIC_DIR = Path(__file__).resolve().parent / "static"
 MUSIC_DIR = ROOT / "src" / "stemmy_cli" / "static" / "music"
 
 sys.path.insert(0, str(ROOT / "src"))
 os.environ["PATH"] = os.environ.get("PATH","") + ":/opt/homebrew/bin:/usr/local/bin"
+
+# Laad .env zodat OPENAI_API_KEY etc. beschikbaar zijn
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(ROOT / ".env",       override=True)
+    _load_dotenv(ROOT / ".env.local", override=True)
+except ImportError:
+    pass
 
 # ── Word index ─────────────────────────────────────────────────────────────────
 
@@ -322,6 +331,395 @@ def _extract_gap(echo_level: int = 2) -> bytes | None:
     return None
 
 
+# ── Spelmodi helpers ───────────────────────────────────────────────────────────
+
+def _dutch_rhyme_key(word: str) -> str:
+    """Rijmsleutel voor Nederlands: laatste 4 tekens (≥5 letters) anders 3."""
+    clean = re.sub(r"[^a-zA-Z]", "", word.lower())
+    return clean[-4:] if len(clean) >= 5 else clean[-3:] if len(clean) >= 3 else clean
+
+
+def _get_rhyme_candidates(target: str, max_candidates: int = 30) -> list:
+    """Vind woorden in de index die rijmen op 'target'. Geeft [(woord, occs), ...]."""
+    key = _dutch_rhyme_key(target)
+    if len(key) < 2:
+        return []
+    candidates = []
+    with _index_lock:
+        for word, occs in _word_index.items():
+            if word != target and _dutch_rhyme_key(word) == key:
+                candidates.append((word, list(occs)))
+    candidates.sort(key=lambda x: len(x[1]))   # zeldzamer = eerder
+    return candidates[:max_candidates]
+
+
+_MAX_FRAG_MS = 4000   # maximale fragmentduur voor semantische modi
+
+def _try_extract_segment(audio_url: str, start_ms: int, end_ms: int, echo_level: int = 2) -> bytes | None:
+    """Extraheer een volledig fragment (start→end ms) en pas echo-filter toe. Met caching.
+    Fragments worden gecapt op _MAX_FRAG_MS om megafragmenten te voorkomen."""
+    import hashlib
+    if end_ms <= start_ms:
+        return None
+    # Cap fragment op max duur — center het venster
+    if end_ms - start_ms > _MAX_FRAG_MS:
+        mid      = (start_ms + end_ms) // 2
+        start_ms = max(0, mid - _MAX_FRAG_MS // 2)
+        end_ms   = start_ms + _MAX_FRAG_MS
+    url_hash   = hashlib.md5(audio_url.encode()).hexdigest()[:8]
+    cache_key  = f"seg_{url_hash}_{start_ms}_{end_ms}_e{echo_level}"
+    fmt_ns     = re.sub(r"[^a-z0-9]", "", (_active_format_id or "all")[:8])
+    fmt_dir    = CACHE_DIR / fmt_ns
+    fmt_dir.mkdir(exist_ok=True)
+    cache_path = fmt_dir / f"{cache_key}.mp3"
+
+    if cache_path.exists() and cache_path.stat().st_size > 500:
+        return cache_path.read_bytes()
+
+    try:
+        from stemmy_cli.audio.parallel_extractor import ParallelExtractor
+    except ImportError:
+        return None
+
+    seg = [{"id": "seg_0", "audio_url": audio_url,
+            "start_time": max(0.0, start_ms / 1000 - 0.3),
+            "end_time":   end_ms / 1000 + 0.5}]
+
+    with tempfile.TemporaryDirectory(prefix="echo_seg_") as tmp:
+        try:
+            extractor = ParallelExtractor(max_workers=2, output_dir=Path(tmp))
+            successes, _ = extractor.extract_segments(seg)
+        except Exception:
+            return None
+        if not successes:
+            return None
+        src = Path(successes[0].output_path)
+        if not src.exists() or src.stat().st_size < 500:
+            return None
+
+        af = _ECHO_FILTERS.get(echo_level, _ECHO_FILTERS[2])
+        r  = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(src),
+             "-af", af, "-c:a", "libmp3lame", "-q:a", "2", str(cache_path)],
+            capture_output=True
+        )
+
+    if r.returncode == 0 and cache_path.exists() and cache_path.stat().st_size > 500:
+        return cache_path.read_bytes()
+    return None
+
+
+def _ffmpeg_concat(clips: list) -> bytes | None:
+    """Concateneer meerdere MP3-bestanden via ffmpeg concat demuxer."""
+    if not clips:
+        return None
+    if len(clips) == 1:
+        return clips[0]
+    with tempfile.TemporaryDirectory(prefix="echo_concat_") as tmp:
+        tmp_path = Path(tmp)
+        clip_paths = []
+        for i, clip_bytes in enumerate(clips):
+            p = tmp_path / f"clip_{i}.mp3"
+            p.write_bytes(clip_bytes)
+            clip_paths.append(p)
+        list_file = tmp_path / "concat.txt"
+        list_file.write_text("\n".join(f"file '{p}'" for p in clip_paths))
+        out = tmp_path / "combined.mp3"
+        r = subprocess.run(
+            ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+             "-i", str(list_file),
+             "-c:a", "libmp3lame", "-q:a", "2", str(out)],
+            capture_output=True
+        )
+        if r.returncode == 0 and out.exists() and out.stat().st_size > 500:
+            return out.read_bytes()
+    return None
+
+
+def _ffmpeg_mix(clips: list) -> bytes | None:
+    """Mix meerdere MP3s GELIJKTIJDIG via ffmpeg amix — voor koor/chamber effect."""
+    if not clips:
+        return None
+    if len(clips) == 1:
+        return clips[0]
+    with tempfile.TemporaryDirectory(prefix="echo_mix_") as tmp:
+        tmp_path = Path(tmp)
+        inputs = []
+        for i, clip_bytes in enumerate(clips):
+            p = tmp_path / f"clip_{i}.mp3"
+            p.write_bytes(clip_bytes)
+            inputs += ["-i", str(p)]
+        n    = len(clips)
+        amix = f"amix=inputs={n}:duration=longest:normalize=0"
+        out  = tmp_path / "mixed.mp3"
+        r = subprocess.run(
+            ["ffmpeg", "-y"] + inputs +
+            ["-filter_complex", amix, "-c:a", "libmp3lame", "-q:a", "2", str(out)],
+            capture_output=True
+        )
+        if r.returncode == 0 and out.exists() and out.stat().st_size > 500:
+            return out.read_bytes()
+    return _ffmpeg_concat(clips)   # fallback op concat
+
+
+def _ffmpeg_crossfade(clips: list, fade_s: float = 0.7) -> bytes | None:
+    """Concateneer clips met crossfade (vloeiende overgang) — voor drift-effect."""
+    if not clips:
+        return None
+    if len(clips) == 1:
+        return clips[0]
+    with tempfile.TemporaryDirectory(prefix="echo_xfade_") as tmp:
+        tmp_path = Path(tmp)
+        for i, clip_bytes in enumerate(clips):
+            (tmp_path / f"clip_{i}.mp3").write_bytes(clip_bytes)
+        inputs = []
+        for i in range(len(clips)):
+            inputs += ["-i", str(tmp_path / f"clip_{i}.mp3")]
+        # Bouw filter_complex op voor n clips
+        n = len(clips)
+        if n == 2:
+            filt    = f"[0][1]acrossfade=d={fade_s}:c1=exp:c2=exp[out]"
+            map_arg = "[out]"
+        elif n == 3:
+            filt    = (f"[0][1]acrossfade=d={fade_s}:c1=exp:c2=exp[cf01];"
+                       f"[cf01][2]acrossfade=d={fade_s}:c1=exp:c2=exp[out]")
+            map_arg = "[out]"
+        else:
+            return _ffmpeg_concat(clips)   # fallback voor 4+
+        out = tmp_path / "xfaded.mp3"
+        r = subprocess.run(
+            ["ffmpeg", "-y"] + inputs +
+            ["-filter_complex", filt, "-map", map_arg,
+             "-c:a", "libmp3lame", "-q:a", "2", str(out)],
+            capture_output=True
+        )
+        if r.returncode == 0 and out.exists() and out.stat().st_size > 500:
+            return out.read_bytes()
+    return _ffmpeg_concat(clips)   # fallback
+
+
+# ── Embedding cache (lazy, eenmalig laden) ─────────────────────────────────────
+
+_emb_cache:         list = []
+_emb_cache_lock          = threading.Lock()
+_emb_cache_loaded: bool  = False
+
+
+def _ensure_emb_cache():
+    """Laad fragment-embeddings eenmalig in geheugen (thread-safe, lazy)."""
+    global _emb_cache_loaded
+    if _emb_cache_loaded:
+        return
+    with _emb_cache_lock:
+        if _emb_cache_loaded:
+            return
+        try:
+            import numpy as np
+            if not _db_path_global:
+                return
+            conn = sqlite3.connect(_db_path_global)
+            rows = conn.execute("""
+                SELECT fe.embedding, f.text, f.item_audio_url,
+                       CAST(f.start_time_seconds * 1000 AS INTEGER),
+                       CAST(f.end_time_seconds   * 1000 AS INTEGER)
+                FROM fragment_embeddings fe
+                JOIN fragments f ON f.id = fe.fragment_id
+                WHERE f.item_audio_url IS NOT NULL
+                  AND f.start_time_seconds IS NOT NULL
+            """).fetchall()
+            conn.close()
+            for emb_blob, text, audio_url, start_ms, end_ms in rows:
+                try:
+                    emb = np.array(json.loads(emb_blob), dtype=float)
+                    _emb_cache.append({
+                        "text":      text or "",
+                        "audio_url": audio_url,
+                        "start_ms":  int(start_ms or 0),
+                        "end_ms":    int(end_ms   or 0),
+                        "emb":       emb,
+                    })
+                except Exception:
+                    continue
+            print(f"✓ Embedding cache: {len(_emb_cache):,} fragmenten", flush=True)
+        except Exception as e:
+            print(f"⚠️  Embedding cache niet beschikbaar: {e}", flush=True)
+        finally:
+            _emb_cache_loaded = True
+
+
+def _similarity_search(query: str, limit: int = 20) -> list:
+    """Semantische zoektocht via in-memory embedding cache."""
+    try:
+        import numpy as np
+        from stemmy_cli.embeddings.service import EmbeddingService
+        _ensure_emb_cache()
+        if not _emb_cache:
+            return []
+        # Detecteer provider op basis van dimensies in de cache
+        # (voorkomt mismatch als embeddings met OpenAI zijn gemaakt)
+        emb_dim  = len(_emb_cache[0]["emb"])
+        provider = "openai" if emb_dim > 500 else "local"
+        svc      = EmbeddingService(provider=provider)
+        results  = svc.embed_texts([query])
+        if not results:
+            return []
+        q_arr  = np.array(results[0].embedding, dtype=float)
+        q_norm = np.linalg.norm(q_arr) + 1e-9
+        scored = []
+        for item in _emb_cache:
+            b   = item["emb"]
+            sim = float(np.dot(q_arr, b) / (q_norm * (np.linalg.norm(b) + 1e-9)))
+            scored.append({
+                "text":       item["text"],
+                "audio_url":  item["audio_url"],
+                "start_ms":   item["start_ms"],
+                "end_ms":     item["end_ms"],
+                "similarity": sim,
+            })
+        scored.sort(key=lambda x: x["similarity"], reverse=True)
+        return scored[:limit]
+    except Exception as e:
+        print(f"Semantic search error: {e}", flush=True)
+        return []
+
+
+# ── Gemini multimodale embeddings ──────────────────────────────────────────────
+
+_gemini_emb_cache:        list = []
+_gemini_emb_lock               = threading.Lock()
+_gemini_emb_loaded:       bool = False
+
+
+def _gemini_transcribe(audio_bytes: bytes, mime_type: str = "audio/webm") -> str:
+    """Laat Gemini-Flash de audio transcriberen naar tekst. Geeft getranscribeerde tekst of ''."""
+    import urllib.request as _req, base64 as _b64, json as _json
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key or not audio_bytes:
+        return ""
+    url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+           "gemini-2.0-flash-lite:generateContent?key=" + api_key)
+    b64 = _b64.b64encode(audio_bytes).decode()
+    payload = {"contents": [{"parts": [
+        {"text": "Transcribeer exact wat er gezegd wordt in de audio. "
+                 "Geef alleen de gesproken woorden terug, geen uitleg of leestekens."},
+        {"inlineData": {"mimeType": mime_type, "data": b64}}
+    ]}]}
+    try:
+        rq = _req.Request(url, data=_json.dumps(payload).encode(),
+                          headers={"Content-Type": "application/json"}, method="POST")
+        with _req.urlopen(rq, timeout=15) as resp:
+            data = _json.loads(resp.read())
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except Exception as e:
+        print(f"  ⚠ Gemini transcribe: {e}", flush=True)
+        return ""
+
+
+def _gemini_embed(audio_bytes: bytes | None = None, text: str = "") -> list | None:
+    """Embed audio + tekst via Gemini REST API. Geeft lijst van floats of None."""
+    import urllib.request, base64 as _b64
+    api_key = os.environ.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        return None
+    parts = []
+    if text:
+        parts.append({"text": text})
+    if audio_bytes:
+        parts.append({
+            "inlineData": {
+                "mimeType": "audio/mpeg",
+                "data": _b64.b64encode(audio_bytes).decode()
+            }
+        })
+    if not parts:
+        return None
+    body = json.dumps({"content": {"parts": parts}}).encode()
+    url  = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-embedding-2-preview:embedContent?key={api_key}"
+    )
+    req = urllib.request.Request(url, data=body, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+            return data.get("embedding", {}).get("values")
+    except Exception as e:
+        print(f"Gemini embed error: {e}", flush=True)
+        return None
+
+
+def _ensure_gemini_emb_cache():
+    """Laad pre-computed Gemini audio-embeddings in geheugen (lazy, thread-safe)."""
+    global _gemini_emb_loaded
+    if _gemini_emb_loaded:
+        return
+    with _gemini_emb_lock:
+        if _gemini_emb_loaded:
+            return
+        try:
+            import numpy as np
+            if not _db_path_global:
+                return
+            conn = sqlite3.connect(_db_path_global)
+            rows = conn.execute("""
+                SELECT ge.embedding, f.text, f.item_audio_url,
+                       CAST(f.start_time_seconds * 1000 AS INTEGER),
+                       CAST(f.end_time_seconds   * 1000 AS INTEGER)
+                FROM fragment_gemini_embeddings ge
+                JOIN fragments f ON f.id = ge.fragment_id
+                WHERE f.item_audio_url IS NOT NULL
+                  AND f.start_time_seconds IS NOT NULL
+            """).fetchall()
+            conn.close()
+            for emb_blob, text, audio_url, start_ms, end_ms in rows:
+                try:
+                    emb = np.array(json.loads(emb_blob), dtype=float)
+                    _gemini_emb_cache.append({
+                        "text":      text or "",
+                        "audio_url": audio_url,
+                        "start_ms":  int(start_ms or 0),
+                        "end_ms":    int(end_ms   or 0),
+                        "emb":       emb,
+                    })
+                except Exception:
+                    continue
+            n = len(_gemini_emb_cache)
+            if n: print(f"✓ Gemini embedding cache: {n:,} fragmenten", flush=True)
+        except Exception as e:
+            if "no such table" not in str(e):
+                print(f"⚠️  Gemini cache: {e}", flush=True)
+        finally:
+            _gemini_emb_loaded = True
+
+
+def _gemini_similarity_search(query_emb: list, limit: int = 20,
+                               mode: str = "similar") -> list:
+    """Zoek via Gemini embeddings. Als cache leeg: fallback op tekst-cache."""
+    try:
+        import numpy as np
+        _ensure_gemini_emb_cache()
+        cache = _gemini_emb_cache if _gemini_emb_cache else _emb_cache
+        if not cache:
+            return []
+        q     = np.array(query_emb, dtype=float)
+        q_dim = len(q)
+        q_norm = np.linalg.norm(q) + 1e-9
+        scored = []
+        for item in cache:
+            b = item["emb"]
+            if len(b) != q_dim:
+                continue
+            sim = float(np.dot(q, b) / (q_norm * (np.linalg.norm(b) + 1e-9)))
+            scored.append({**{k: v for k, v in item.items() if k != "emb"},
+                           "similarity": sim})
+        scored.sort(key=lambda x: x["similarity"], reverse=True)
+        return scored[:limit]
+    except Exception as e:
+        print(f"Gemini similarity error: {e}", flush=True)
+        return []
+
+
 # ── HTML ───────────────────────────────────────────────────────────────────────
 
 HTML = r"""<!DOCTYPE html>
@@ -472,6 +870,7 @@ h1{
   background:rgba(10,10,25,0.9);cursor:pointer;
   display:flex;align-items:center;justify-content:center;
   font-size:1.2rem;transition:all 0.25s;flex-shrink:0;
+  text-decoration:none;
 }
 #mic-btn{border-color:rgba(90,40,40,0.55);color:rgba(190,120,120,0.75);}
 #mic-btn:hover{border-color:rgba(180,60,60,0.7);box-shadow:0 0 22px rgba(160,40,40,0.3);}
@@ -800,6 +1199,32 @@ h1{
   text-decoration:underline;text-underline-offset:3px;
   text-decoration-color:rgba(90,90,190,0.35);
 }
+
+/* ── Spelmodi pills ── */
+#mode-row{
+  display:flex;align-items:center;gap:5px;
+  flex-wrap:wrap;justify-content:center;
+  margin-top:0.55rem;opacity:0.5;transition:opacity 0.3s;
+}
+#mode-row:hover{opacity:1;}
+.mode-pill{
+  background:rgba(6,6,18,0.9);
+  border:1px solid rgba(35,35,80,0.35);
+  border-radius:999px;padding:3px 11px;
+  color:rgba(65,65,110,0.6);
+  font-family:'Raleway',sans-serif;font-weight:300;
+  font-size:0.48rem;letter-spacing:0.18em;text-transform:uppercase;
+  cursor:pointer;transition:all 0.2s;
+}
+.mode-pill:hover{
+  border-color:rgba(60,60,140,0.6);
+  color:rgba(115,115,185,0.8);
+}
+.mode-pill.active{
+  border-color:rgba(90,72,190,0.72);
+  color:rgba(160,142,248,0.92);
+  box-shadow:0 0 10px rgba(70,52,168,0.22);
+}
 </style>
 </head>
 <body>
@@ -837,6 +1262,21 @@ h1{
     <button class="icon-btn" id="sound-btn" title="Achtergrondgeluid aan/uit">♪</button>
     <button class="icon-btn" id="auto-btn" title="Auto-mode: computer roept woorden">∿</button>
     <button class="icon-btn" id="info-btn" title="Over Grafstemming">ℹ</button>
+    <a class="icon-btn" href="/echo/3d" title="Open 3D-variant">3D</a>
+  </div>
+
+  <!-- Spelmodi pills -->
+  <div id="mode-row">
+    <button class="mode-pill active" data-mode="word"     title="Woordecho — exact woord">woord</button>
+    <button class="mode-pill"        data-mode="rhyme"    title="Rijmecho — antwoord rijmt">rijm</button>
+    <button class="mode-pill"        data-mode="semantic" title="Semantisch — zoek op betekenis">semantisch</button>
+    <button class="mode-pill"        data-mode="sentence" title="Zinecho — spreek een zin">zin</button>
+    <button class="mode-pill"        data-mode="chamber"  title="Echo Chamber — meerdere bronnen">chamber</button>
+    <button class="mode-pill"        data-mode="drift"    title="Echo Drift — betekenis vervaagt">drift</button>
+    <button class="mode-pill"        data-mode="anti"     title="Anti-echo — de tegenstem">anti</button>
+    <button class="mode-pill"        data-mode="canon"    title="Stemmen-canon — koor van unieke stemmen">canon</button>
+    <button class="mode-pill"        data-mode="frag"     title="Fragment-echo — twee fragmenten botsen">◈</button>
+    <button class="mode-pill"        data-mode="audio"    title="Microfoon — spreek in, hoor een echo">🎙</button>
   </div>
 
   <!-- Echo dots — centered below controls -->
@@ -928,6 +1368,33 @@ h1{
         Bouw een streak op voor bonuspunten.
         Woorden die niet in het archief rusten breken de streak.
       </p>
+    </div>
+    <div class="info-section">
+      <h3>Spelmodi</h3>
+      <div class="info-row">
+        <span class="info-icon">🎵</span>
+        <span class="info-desc"><strong>Rijm</strong> — het archief antwoordt met een rijmwoord</span>
+      </div>
+      <div class="info-row">
+        <span class="info-icon">🧠</span>
+        <span class="info-desc"><strong>Semantisch / Zin</strong> — zoek op betekenis, niet op exact woord</span>
+      </div>
+      <div class="info-row">
+        <span class="info-icon">🔄</span>
+        <span class="info-desc"><strong>Chamber</strong> — hetzelfde woord, meerdere bronnen na elkaar</span>
+      </div>
+      <div class="info-row">
+        <span class="info-icon">🌀</span>
+        <span class="info-desc"><strong>Drift</strong> — de echo vervaagt: van dichtbij naar ver weg</span>
+      </div>
+      <div class="info-row">
+        <span class="info-icon">⚡</span>
+        <span class="info-desc"><strong>Anti</strong> — de tegenstem, wat de echokamer verzwijgt</span>
+      </div>
+      <div class="info-row">
+        <span class="info-icon">🎙️</span>
+        <span class="info-desc"><strong>Canon</strong> — vele stemmen spreken hetzelfde woord als koor</span>
+      </div>
     </div>
     <button id="info-close">sluiten</button>
   </div>
@@ -1244,7 +1711,9 @@ pit.addEventListener('click',()=>{ if(!listening) startListening(); });
 function submit(){
   const q=input.value.trim();
   input.value='';
-  if(q) sendQuery(q);
+  // Frag-modus heeft geen tekst nodig — Enter triggert direct een fragment-echo
+  if(currentMode==='frag'){ sendFragEchoMode(); return; }
+  if(q) sendModeQuery(q);
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1318,6 +1787,12 @@ function scheduleAutoWord(){
 
 async function autoTypeWord(){
   if(!autoMode) return;
+  // Frag-modus: sla woordtypen over, fire direct fragment-echo
+  if(currentMode==='frag'){
+    await sendFragEchoMode();
+    scheduleAutoWord();
+    return;
+  }
   const inp=document.getElementById('word-input');
   // Sla over als gebruiker al aan het typen is
   if(inp.value.trim().length>0){ scheduleAutoWord(); return; }
@@ -1350,6 +1825,299 @@ document.querySelectorAll('.echo-dot').forEach(btn=>{
     echoValLbl.textContent=echoLabels[echoLevel];
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// SPELMODI
+// ═══════════════════════════════════════════════════════════════════
+let currentMode='word';
+let _micPrevMode='word';   // modus vóór mic — zodat mic rijm/woord etc. onthouden wordt
+const modeMsgs={
+  word:'wacht op een woord…', rhyme:'rijmwoord verwacht…',
+  semantic:'concept of idee…', sentence:'spreek een zin…',
+  chamber:'woord galmt van alle kanten…', drift:'concept vervaagt in de echo…',
+  anti:'zoek de tegenstem…', canon:'stemmen als koor…',
+  frag:'fragment-echo…', audio:'druk op Enter om op te nemen…'
+};
+
+document.querySelectorAll('.mode-pill').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const newMode=btn.dataset.mode;
+    // Microfoon-pill: sla huidige modus op zodat rijm/woord etc. bewaard blijft
+    if(newMode==='audio' && currentMode!=='audio') _micPrevMode=currentMode;
+    currentMode=newMode;
+    document.querySelectorAll('.mode-pill').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    setStatus(modeMsgs[currentMode]||'wacht op een woord…');
+    setSentHint('');
+    // Frag-modus: meteen een fragment-echo triggeren
+    if(currentMode==='frag') sendFragEchoMode();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// FRAG MODE: random fragment → verwant fragment echoot terug
+// ═══════════════════════════════════════════════════════════════════
+async function sendFragEchoMode(){
+  if(_activeCtrl){ _activeCtrl.abort(); }
+  _activeCtrl=new AbortController();
+  ensureDrone();
+  playWhoosh();
+
+  setStatus('fragment ophalen…');
+  setSentHint('');
+  addRipple('fall');
+
+  try{
+    // 1. Random fragment ophalen (Gemini cache als beschikbaar)
+    const fragResp=await fetch('/echo/randomfrag',{signal:_activeCtrl.signal});
+    if(!fragResp.ok){ handleNotFound('fragment'); return; }
+    const frag=await fragResp.json();
+
+    const firstWord=(frag.text||'◈').split(' ')[0];
+    wordFall(firstWord);
+    setStatus('fragmenten koppelen…');
+
+    const enc=encodeURIComponent;
+    const qp=`audio_url=${enc(frag.audio_url)}&start_ms=${frag.start_ms}&end_ms=${frag.end_ms}`;
+
+    // 2. Bron-audio + echo-audio parallel ophalen
+    const [srcResp,echoResp]=await Promise.all([
+      fetch(`/echo/fragsound?${qp}&echo=0`,{signal:_activeCtrl.signal}),
+      fetch(`/echo/fragecho?${qp}&mode=similar&echo=${echoLevel}`,{signal:_activeCtrl.signal}),
+    ]);
+    if(!srcResp.ok||!echoResp.ok){ handleNotFound('fragment'); return; }
+
+    const echoTextHdr=echoResp.headers.get('X-Fragment-Text')||'';
+    const similarity=echoResp.headers.get('X-Similarity')||'';
+    const [srcBlob,echoBlob]=await Promise.all([srcResp.blob(),echoResp.blob()]);
+
+    // Status
+    if(similarity)
+      setStatus(`fragment-echo — ${Math.round(parseFloat(similarity)*100)}% verwant`);
+    else
+      setStatus('fragment-echo');
+
+    if(frag.text) setSentHint(frag.text.slice(0,80));
+
+    addToHistory('◈');
+    addPoints('◈',0);
+
+    // 3. Speel bron, dan — na korte pauze — de echo
+    const srcUrl=URL.createObjectURL(srcBlob);
+    const echoUrl=URL.createObjectURL(echoBlob);
+    const srcAudio=new Audio(srcUrl);
+    const echoAudio=new Audio(echoUrl);
+    srcAudio.volume=0.80;
+    echoAudio.volume=1.0;
+
+    srcAudio.play().catch(()=>{});
+    addRipple('fall');
+
+    srcAudio.onended=()=>{
+      URL.revokeObjectURL(srcUrl);
+      setTimeout(()=>{
+        // Echo-fragment tekst tonen
+        if(echoTextHdr){
+          try{ setSentHint(decodeURIComponent(echoTextHdr)); }catch(e){}
+        }
+        const echoFirst=(echoTextHdr
+          ? decodeURIComponent(echoTextHdr).split(' ')[0]
+          : '◈');
+        wordEcho(echoFirst);
+        addRipple('echo');
+        addRipple('echo',380);
+        echoAudio.play().catch(()=>{});
+      },350);
+    };
+    echoAudio.onended=()=>{
+      URL.revokeObjectURL(echoUrl);
+      setStatus('fragment-echo klaar');
+      setTimeout(wordVanish,1200);
+    };
+
+  }catch(e){
+    if(e.name==='AbortError') return;
+    setStatus('geen verbinding'); wordVanish();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AUDIO MODE: microfoon opname → multimodale echo
+// ═══════════════════════════════════════════════════════════════════
+let _audioRecorder=null;
+let _audioChunks=[];
+let _audioStream=null;
+let _audioRecording=false;
+
+async function sendAudioQuery(){
+  // Als al aan het opnemen: stop en stuur
+  if(_audioRecording && _audioRecorder && _audioRecorder.state==='recording'){
+    _audioRecorder.stop();
+    return;
+  }
+  if(_activeCtrl){ _activeCtrl.abort(); }
+  _activeCtrl=new AbortController();
+  ensureDrone();
+  playWhoosh();
+
+  try{
+    _audioStream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+  }catch(e){
+    setStatus('microfoon niet beschikbaar'); wordVanish(); return;
+  }
+
+  _audioChunks=[];
+  const mime=MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ?'audio/webm;codecs=opus':'audio/webm';
+  _audioRecorder=new MediaRecorder(_audioStream,{mimeType:mime});
+  _audioRecorder.ondataavailable=e=>{ if(e.data.size>0) _audioChunks.push(e.data); };
+  _audioRecorder.onstop=async()=>{
+    _audioRecording=false;
+    _audioStream.getTracks().forEach(t=>t.stop());
+    const blob=new Blob(_audioChunks,{type:mime});
+    document.querySelector('.mode-pill[data-mode="audio"]').textContent='🎙';
+    await _submitAudioToServer(blob);
+  };
+  _audioRecorder.start(200); // 200ms chunks
+  _audioRecording=true;
+  document.querySelector('.mode-pill[data-mode="audio"]').textContent='⏹';
+  wordFall('🎙');
+  addRipple('fall');
+
+  let remaining=6;
+  setStatus(`opnemen… (${remaining}s — Enter om te stoppen)`);
+  const countdown=setInterval(()=>{
+    remaining--;
+    if(remaining<=0){ clearInterval(countdown); return; }
+    setStatus(`opnemen… (${remaining}s — Enter om te stoppen)`);
+  },1000);
+
+  // Auto-stop na 6 seconden
+  setTimeout(()=>{
+    clearInterval(countdown);
+    if(_audioRecorder&&_audioRecorder.state==='recording') _audioRecorder.stop();
+  },6000);
+}
+
+async function _submitAudioToServer(blob){
+  setStatus('geluid analyseren…');
+  try{
+    const arrayBuf=await blob.arrayBuffer();
+    // Stuur de vorige modus mee zodat rijm/woord/semantisch via mic werken
+    const micMode=_micPrevMode||'audio';
+    const r=await fetch(`/echo/audiomatch?echo=${echoLevel}&mode=${encodeURIComponent(micMode)}`,{
+      method:'POST',
+      headers:{'Content-Type':blob.type||'audio/webm'},
+      body:arrayBuf,
+      signal:_activeCtrl.signal,
+    });
+    if(!r.ok){ handleNotFound('geluid'); return; }
+    const fragmentText=r.headers.get('X-Fragment-Text')||'';
+    const rhymeWord   =r.headers.get('X-Rhyme-Word')||'';
+    const wordMatched =r.headers.get('X-Word-Matched')||'';
+    const transcript  =r.headers.get('X-Transcript')||'';
+    const similarity  =r.headers.get('X-Similarity')||'';
+    const audioBlob=await r.blob();
+    // Status tonen op basis van modus
+    if(rhymeWord)
+      setStatus(`rijm: ${rhymeWord}`);
+    else if(wordMatched)
+      setStatus(`woord: ${wordMatched}`);
+    else if(similarity)
+      setStatus(`geluidsverwantschap: ${Math.round(parseFloat(similarity)*100)}%`);
+    else
+      setStatus('echo van jouw geluid');
+    // Transcript tonen als hint
+    const hintTxt=fragmentText||rhymeWord||wordMatched||'';
+    if(hintTxt){ try{ setSentHint(decodeURIComponent(hintTxt)); }catch(e){} }
+    const displayWord=rhymeWord||wordMatched||(transcript?decodeURIComponent(transcript).split(' ')[0]:'🎙');
+    addToHistory('🎙');
+    addPoints('🎙',0);
+    playEcho(audioBlob, displayWord);
+  }catch(e){
+    if(e.name==='AbortError') return;
+    setStatus('geen verbinding'); wordVanish();
+  }
+}
+
+async function sendModeQuery(query){
+  if(currentMode==='word'){ sendQuery(query); return; }
+  if(currentMode==='frag'){ await sendFragEchoMode(); return; }
+  if(currentMode==='audio'){ await sendAudioQuery(); return; }
+
+  if(_activeCtrl){ _activeCtrl.abort(); }
+  _activeCtrl=new AbortController();
+  ensureDrone();
+  playWhoosh();
+
+  const q=encodeURIComponent(query);
+  const modeUrls={
+    rhyme:    `/echo/rhyme?word=${q}&echo=${echoLevel}`,
+    semantic: `/echo/semantic?query=${q}&echo=${echoLevel}`,
+    sentence: `/echo/sentence?query=${q}&echo=${echoLevel}`,
+    chamber:  `/echo/chamber?word=${q}&echo=${echoLevel}`,
+    drift:    `/echo/drift?query=${q}&echo=${echoLevel}`,
+    anti:     `/echo/anti?query=${q}&echo=${echoLevel}`,
+    canon:    `/echo/canon?word=${q}&n=5&echo=${echoLevel}`,
+  };
+  const url=modeUrls[currentMode];
+  if(!url){ sendQuery(query); return; }
+
+  const modeLoadMsgs={
+    rhyme:'rijmwoord zoeken…', semantic:'betekenis doorzoeken…',
+    sentence:'zin-echo zoeken…', chamber:'alle bronnen raadplegen…',
+    drift:'echo drift berekenen…', anti:'tegenstem zoeken…', canon:'koor samenstellen…',
+    audio:'geluid analyseren…'
+  };
+  setStatus(modeLoadMsgs[currentMode]||'zoeken…');
+  wordFall(query.split(' ')[0]);
+  addRipple('fall');
+
+  try{
+    const r=await fetch(url,{signal:_activeCtrl.signal});
+    if(!r.ok){ handleNotFound(query); return; }
+
+    const rhymeWord   =r.headers.get('X-Rhyme-Word')||'';
+    const fragmentText=r.headers.get('X-Fragment-Text')||'';
+    const chamberSrcs =r.headers.get('X-Chamber-Sources')||'';
+    const driftLayers =r.headers.get('X-Drift-Layers')||'';
+    const antiSim     =r.headers.get('X-Anti-Similarity')||'';
+    const canonVoices =r.headers.get('X-Canon-Voices')||'';
+    const wordMatched =r.headers.get('X-Word-Matched')||query;
+    const similarity  =r.headers.get('X-Similarity')||'';
+
+    const blob=await r.blob();
+
+    if(currentMode==='rhyme'&&rhymeWord)
+      setStatus(`rijmt: '${query}' → '${rhymeWord}'`);
+    else if((currentMode==='semantic'||currentMode==='sentence')&&similarity)
+      setStatus(`verwantschap: ${Math.round(parseFloat(similarity)*100)}%`);
+    else if(currentMode==='chamber'&&chamberSrcs)
+      setStatus(`${chamberSrcs} bronnen weerkaatsen '${wordMatched}'`);
+    else if(currentMode==='drift'&&driftLayers)
+      setStatus(`echo drift — ${driftLayers} lagen`);
+    else if(currentMode==='anti'&&antiSim)
+      setStatus(`tegenstem — ${Math.round(parseFloat(antiSim)*100)}% verwant`);
+    else if(currentMode==='canon'&&canonVoices)
+      setStatus(`${canonVoices} stemmen als koor`);
+    else
+      setStatus(`echo van '${wordMatched}'`);
+
+    if(fragmentText){
+      try{ setSentHint(decodeURIComponent(fragmentText)); }
+      catch(e){ setSentHint(''); }
+    }
+
+    const displayWord=rhymeWord||wordMatched||query;
+    addToHistory(displayWord);
+    addPoints(displayWord,0);
+    playEcho(blob,displayWord);
+  }catch(e){
+    if(e.name==='AbortError') return;
+    setStatus('geen verbinding');
+    wordVanish();
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // CORE: send query
@@ -1763,6 +2531,31 @@ class EchoHandler(BaseHTTPRequestHandler):
         if path in ("", "/echo", "/echo/index.html"):
             self._send(200, "text/html; charset=utf-8", HTML.encode())
 
+        elif path == "/echo/3d":
+            fpath = ECHO_STATIC_DIR / "echo3d.html"
+            if not fpath.exists():
+                self._send_error(404, "Niet gevonden"); return
+            self._send(200, "text/html; charset=utf-8", fpath.read_bytes())
+
+        elif path.startswith("/echo/static/"):
+            rel = path.removeprefix("/echo/static/").strip("/")
+            if not rel or ".." in rel:
+                self._send_error(403, "Verboden"); return
+            fpath = (ECHO_STATIC_DIR / rel).resolve()
+            try:
+                fpath.relative_to(ECHO_STATIC_DIR.resolve())
+            except ValueError:
+                self._send_error(403, "Verboden"); return
+            if not fpath.exists() or not fpath.is_file():
+                self._send_error(404, "Niet gevonden"); return
+            ctype = {
+                ".html": "text/html; charset=utf-8",
+                ".js": "application/javascript; charset=utf-8",
+                ".css": "text/css; charset=utf-8",
+                ".json": "application/json; charset=utf-8",
+            }.get(fpath.suffix.lower(), "application/octet-stream")
+            self._send(200, ctype, fpath.read_bytes())
+
         elif path == "/echo/ready":
             with _index_lock:
                 n = len(_word_index)
@@ -1859,6 +2652,508 @@ class EchoHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(audio)
 
+        # ── Fragment echo endpoints ─────────────────────────────────────────────
+
+        elif path == "/echo/randomfrag":
+            # Geeft een willekeurig fragment terug — liefst uit Gemini cache (audio-embeddings)
+            _ensure_gemini_emb_cache()
+            cache = _gemini_emb_cache if _gemini_emb_cache else None
+            if not cache:
+                _ensure_emb_cache()
+                cache = _emb_cache
+            if not cache:
+                self._send_error(503, "Geen embeddings geladen"); return
+            item = random.choice(cache)
+            data = json.dumps({
+                "audio_url": item["audio_url"],
+                "start_ms":  item["start_ms"],
+                "end_ms":    item["end_ms"],
+                "text":      item.get("text", "")[:120],
+                "has_audio_emb": bool(_gemini_emb_cache),
+            }).encode()
+            self._send(200, "application/json", data)
+
+        elif path == "/echo/fragsound":
+            # Speelt een fragment af (bron zelf, geen similarity search)
+            from urllib.parse import quote as urlquote
+            audio_url  = unquote(qs.get("audio_url", [""])[0]).strip()
+            start_ms   = int(qs.get("start_ms", ["0"])[0] or 0)
+            end_ms     = int(qs.get("end_ms",   ["0"])[0] or 0)
+            echo_raw   = qs.get("echo", ["2"])[0]
+            try: echo_level = max(0, min(3, int(echo_raw)))
+            except: echo_level = 2
+            if not audio_url or end_ms <= start_ms:
+                self._send_error(400, "Ongeldige parameters"); return
+            audio = _try_extract_segment(audio_url, start_ms, end_ms, echo_level)
+            if not audio:
+                self._send_error(404, "Fragment niet beschikbaar"); return
+            self._send(200, "audio/mpeg", audio)
+
+        elif path == "/echo/fragecho":
+            # Fragment-to-fragment echo via tekst-embeddings
+            from urllib.parse import quote as urlquote
+            audio_url  = unquote(qs.get("audio_url", [""])[0]).strip()
+            start_ms   = int(qs.get("start_ms", ["0"])[0] or 0)
+            end_ms     = int(qs.get("end_ms",   ["0"])[0] or 0)
+            mode       = qs.get("mode", ["similar"])[0]
+            echo_raw   = qs.get("echo", ["2"])[0]
+            try: echo_level = max(0, min(3, int(echo_raw)))
+            except: echo_level = 2
+            if not audio_url:
+                self._send_error(400, "Geen audio_url"); return
+            # Probeer Gemini audio-embeddings eerst (betere sound-matching)
+            _ensure_gemini_emb_cache()
+            use_cache = _gemini_emb_cache if _gemini_emb_cache else None
+            if not use_cache:
+                _ensure_emb_cache()
+                use_cache = _emb_cache
+            # Zoek het bronFragment in de cache op audio_url + timing
+            src_item = None
+            for item in use_cache:
+                if item["audio_url"] == audio_url and abs(item["start_ms"] - start_ms) < 500:
+                    src_item = item; break
+            # Fallback: zoek in tekst-cache als Gemini cache niet matcht
+            if src_item is None and use_cache is _gemini_emb_cache:
+                _ensure_emb_cache()
+                use_cache = _emb_cache
+                for item in use_cache:
+                    if item["audio_url"] == audio_url and abs(item["start_ms"] - start_ms) < 500:
+                        src_item = item; break
+            if src_item is None:
+                self._send_error(404, "Fragment niet in embedding cache"); return
+            try:
+                import numpy as np
+                q     = src_item["emb"]
+                q_norm = np.linalg.norm(q) + 1e-9
+                scored = []
+                for item in use_cache:
+                    if item["audio_url"] == audio_url:
+                        continue  # zelfde bron overslaan
+                    b   = item["emb"]
+                    sim = float(np.dot(q, b) / (q_norm * (np.linalg.norm(b) + 1e-9)))
+                    scored.append({**{k: v for k, v in item.items() if k != "emb"},
+                                   "similarity": sim})
+                scored.sort(key=lambda x: x["similarity"], reverse=True)
+                if mode == "anti":
+                    pool = [s for s in scored if 0.08 <= s["similarity"] <= 0.45]
+                    candidate = random.choice(pool[:20]) if pool else scored[-1]
+                else:
+                    candidate = scored[0]
+            except Exception as e:
+                self._send_error(500, f"Similarity error: {e}"); return
+            audio = _try_extract_segment(
+                candidate["audio_url"], candidate["start_ms"],
+                candidate["end_ms"], echo_level=echo_level
+            )
+            if not audio:
+                self._send_error(404, "Echo-fragment niet beschikbaar"); return
+            self.send_response(200)
+            self.send_header("Content-Type",    "audio/mpeg")
+            self.send_header("Content-Length",  str(len(audio)))
+            self.send_header("X-Similarity",    f"{candidate['similarity']:.2f}")
+            self.send_header("X-Fragment-Text", urlquote(candidate.get("text","")[:80]))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Expose-Headers", "X-Similarity, X-Fragment-Text")
+            self.end_headers()
+            self.wfile.write(audio)
+
+        # ── Spelmodi endpoints ──────────────────────────────────────────────────
+
+        elif path == "/echo/rhyme":
+            raw_word = unquote(qs.get("word", [""])[0]).strip()[:60]
+            raw_word = re.sub(r"[^\w\-]", "", raw_word.lower())
+            echo_raw = qs.get("echo", ["2"])[0]
+            try: echo_level = max(0, min(3, int(echo_raw)))
+            except: echo_level = 2
+            if not raw_word:
+                self._send_error(400, "Geen woord opgegeven"); return
+            if not _index_ready.is_set():
+                self._send_error(503, "Index niet klaar"); return
+            candidates = _get_rhyme_candidates(raw_word)
+            if not candidates:
+                self._send_error(404, f"Geen rijmwoord voor '{raw_word}'"); return
+            random.shuffle(candidates)
+            audio, rhyme_word = None, ""
+            for word, occs in candidates[:10]:
+                occ     = random.choice(occs)
+                fmt_ns  = re.sub(r"[^a-z0-9]", "", (_active_format_id or "all")[:8])
+                fmt_dir = CACHE_DIR / fmt_ns; fmt_dir.mkdir(exist_ok=True)
+                ck      = re.sub(r"[^a-z0-9]", "_", word)
+                cp      = fmt_dir / f"{ck}_rhyme_e{echo_level}.mp3"
+                audio   = _try_extract(occ, cp, variant=0, echo_level=echo_level)
+                if audio: rhyme_word = word; break
+            if not audio:
+                self._send_error(404, "Geen rijmfragment gevonden"); return
+            self.send_response(200)
+            self.send_header("Content-Type",    "audio/mpeg")
+            self.send_header("Content-Length",  str(len(audio)))
+            self.send_header("X-Rhyme-Word",    rhyme_word)
+            self.send_header("X-Original-Word", raw_word)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Expose-Headers", "X-Rhyme-Word, X-Original-Word")
+            self.end_headers()
+            self.wfile.write(audio)
+
+        elif path in ("/echo/semantic", "/echo/sentence"):
+            from urllib.parse import quote as urlquote
+            raw_query = unquote(qs.get("query", [""])[0]).strip()[:200]
+            raw_query = re.sub(r"[^\w\s\-',.]", "", raw_query, flags=re.UNICODE)
+            echo_raw  = qs.get("echo", ["2"])[0]
+            try: echo_level = max(0, min(3, int(echo_raw)))
+            except: echo_level = 2
+            is_sentence = path == "/echo/sentence"
+            if not raw_query:
+                self._send_error(400, "Geen zoekopdracht"); return
+            # Zin-modus met 1 woord → val terug op gewone woordecho
+            if is_sentence and len(raw_query.split()) == 1:
+                if not _index_ready.is_set():
+                    self._send_error(503, "Index niet klaar"); return
+                matched, _ = _resolve_query(raw_query)
+                audio, freq, ctx_b, ctx_a = _extract_and_echo(matched, variant=0, echo_level=echo_level)
+                if audio is None:
+                    self._send_error(404, "Niet gevonden"); return
+                self.send_response(200)
+                self.send_header("Content-Type",   "audio/mpeg")
+                self.send_header("Content-Length", str(len(audio)))
+                self.send_header("X-Word-Matched", matched)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Expose-Headers", "X-Word-Matched")
+                self.end_headers()
+                self.wfile.write(audio)
+                return
+            results = _similarity_search(raw_query, limit=5)
+            if not results:
+                self._send_error(404, "Geen semantisch resultaat"); return
+            audio, top = None, None
+            for candidate in results:
+                audio = _try_extract_segment(
+                    candidate["audio_url"], candidate["start_ms"],
+                    candidate["end_ms"], echo_level=echo_level
+                )
+                if audio: top = candidate; break
+            if not audio:
+                self._send_error(404, "Fragment niet beschikbaar"); return
+            self.send_response(200)
+            self.send_header("Content-Type",    "audio/mpeg")
+            self.send_header("Content-Length",  str(len(audio)))
+            self.send_header("X-Similarity",    f"{top['similarity']:.2f}")
+            self.send_header("X-Fragment-Text", urlquote(top.get("text","")[:80]))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Expose-Headers", "X-Similarity, X-Fragment-Text")
+            self.end_headers()
+            self.wfile.write(audio)
+
+        elif path == "/echo/chamber":
+            raw_word = unquote(qs.get("word", [""])[0]).strip()[:120]
+            raw_word = re.sub(r"[^\w\s\-',.]", "", raw_word, flags=re.UNICODE)
+            echo_raw = qs.get("echo", ["2"])[0]
+            try: echo_level = max(0, min(3, int(echo_raw)))
+            except: echo_level = 2
+            if not raw_word:
+                self._send_error(400, "Geen woord opgegeven"); return
+            if not _index_ready.is_set():
+                self._send_error(503, "Index niet klaar"); return
+            matched, _ = _resolve_query(raw_word)
+            occs = _word_index.get(matched, [])
+            if not occs:
+                self._send_error(404, f"'{raw_word}' niet gevonden"); return
+            url_groups: dict[str, list] = {}
+            for occ in occs:
+                url_groups.setdefault(occ["audio_url"], []).append(occ)
+            unique_urls = sorted(url_groups.keys())   # deterministisch
+            clips = []
+            for url in unique_urls[:6]:
+                if len(clips) >= 4: break
+                occ     = random.choice(url_groups[url])
+                fmt_ns  = re.sub(r"[^a-z0-9]", "", (_active_format_id or "all")[:8])
+                fmt_dir = CACHE_DIR / fmt_ns; fmt_dir.mkdir(exist_ok=True)
+                ck      = re.sub(r"[^a-z0-9]", "_", matched)
+                cp      = fmt_dir / f"{ck}_ch{len(clips)}_e{echo_level}.mp3"
+                a       = _try_extract(occ, cp, variant=len(clips) % 4, echo_level=echo_level)
+                if a: clips.append(a)
+            if not clips:
+                self._send_error(404, "Geen audio gevonden"); return
+            # Chamber: stemmen tegelijk (mix) — echokamer-gevoel
+            combined = _ffmpeg_mix(clips) if len(clips) > 1 else clips[0]
+            if not combined:
+                self._send_error(500, "Mix mislukt"); return
+            self.send_response(200)
+            self.send_header("Content-Type",      "audio/mpeg")
+            self.send_header("Content-Length",    str(len(combined)))
+            self.send_header("X-Chamber-Sources", str(len(clips)))
+            self.send_header("X-Word-Matched",    matched)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Expose-Headers", "X-Chamber-Sources, X-Word-Matched")
+            self.end_headers()
+            self.wfile.write(combined)
+
+        elif path == "/echo/drift":
+            from urllib.parse import quote as urlquote
+            raw_query = unquote(qs.get("query", [""])[0]).strip()[:200]
+            raw_query = re.sub(r"[^\w\s\-',.]", "", raw_query, flags=re.UNICODE)
+            echo_raw  = qs.get("echo", ["2"])[0]
+            try: echo_level = max(0, min(3, int(echo_raw)))
+            except: echo_level = 2
+            if not raw_query:
+                self._send_error(400, "Geen zoekopdracht"); return
+            results = _similarity_search(raw_query, limit=60)
+            if not results:
+                self._send_error(404, "Onvoldoende resultaten voor drift"); return
+            close  = [r for r in results if r["similarity"] >= 0.65]
+            medium = [r for r in results if 0.40 <= r["similarity"] < 0.65]
+            far    = [r for r in results if r["similarity"] < 0.40]
+            if not close:  close  = results[:2]
+            if not medium: medium = results[len(close):len(close)+2]
+            if not far:    far    = results[len(close)+len(medium):len(close)+len(medium)+2]
+            clips, sims = [], []
+            for layer in (close[:2], medium[:2], far[:2]):
+                for candidate in layer:
+                    a = _try_extract_segment(
+                        candidate["audio_url"], candidate["start_ms"],
+                        candidate["end_ms"], echo_level=echo_level
+                    )
+                    if a:
+                        clips.append(a)
+                        sims.append(f"{candidate['similarity']:.2f}")
+                        break
+            if not clips:
+                self._send_error(404, "Geen audio gevonden"); return
+            # Drift: crossfade tussen lagen — semantisch glijden
+            combined = _ffmpeg_crossfade(clips) if len(clips) > 1 else clips[0]
+            if not combined:
+                self._send_error(500, "Drift crossfade mislukt"); return
+            self.send_response(200)
+            self.send_header("Content-Type",         "audio/mpeg")
+            self.send_header("Content-Length",       str(len(combined)))
+            self.send_header("X-Drift-Layers",       str(len(clips)))
+            self.send_header("X-Drift-Similarities", ",".join(sims))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Expose-Headers", "X-Drift-Layers, X-Drift-Similarities")
+            self.end_headers()
+            self.wfile.write(combined)
+
+        elif path == "/echo/anti":
+            from urllib.parse import quote as urlquote
+            raw_query = unquote(qs.get("query", [""])[0]).strip()[:200]
+            raw_query = re.sub(r"[^\w\s\-',.]", "", raw_query, flags=re.UNICODE)
+            echo_raw  = qs.get("echo", ["2"])[0]
+            try: echo_level = max(0, min(3, int(echo_raw)))
+            except: echo_level = 2
+            if not raw_query:
+                self._send_error(400, "Geen zoekopdracht"); return
+            results = _similarity_search(raw_query, limit=300)
+            if not results:
+                self._send_error(404, "Geen anti-echo gevonden"); return
+            anti = [r for r in results if 0.08 <= r["similarity"] <= 0.40]
+            if not anti:
+                anti = results[-20:]   # fallback: laagste scores
+            candidate = random.choice(anti[:20])
+            audio = _try_extract_segment(
+                candidate["audio_url"], candidate["start_ms"],
+                candidate["end_ms"], echo_level=echo_level
+            )
+            if not audio:
+                self._send_error(404, "Anti-echo fragment niet beschikbaar"); return
+            self.send_response(200)
+            self.send_header("Content-Type",       "audio/mpeg")
+            self.send_header("Content-Length",     str(len(audio)))
+            self.send_header("X-Anti-Similarity",  f"{candidate['similarity']:.2f}")
+            self.send_header("X-Fragment-Text",    urlquote(candidate.get("text","")[:80]))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Expose-Headers", "X-Anti-Similarity, X-Fragment-Text")
+            self.end_headers()
+            self.wfile.write(audio)
+
+        elif path == "/echo/canon":
+            raw_word = unquote(qs.get("word", [""])[0]).strip()[:120]
+            raw_word = re.sub(r"[^\w\s\-',.]", "", raw_word, flags=re.UNICODE)
+            echo_raw = qs.get("echo", ["2"])[0]
+            n_raw    = qs.get("n",    ["5"])[0]
+            try: echo_level = max(0, min(3, int(echo_raw)))
+            except: echo_level = 2
+            try: n_voices = max(2, min(10, int(n_raw)))
+            except: n_voices = 5
+            if not raw_word:
+                self._send_error(400, "Geen woord opgegeven"); return
+            if not _index_ready.is_set():
+                self._send_error(503, "Index niet klaar"); return
+            matched, _ = _resolve_query(raw_word)
+            occs = _word_index.get(matched, [])
+            if not occs:
+                self._send_error(404, f"'{raw_word}' niet gevonden"); return
+            url_groups: dict[str, list] = {}
+            for occ in occs:
+                url_groups.setdefault(occ["audio_url"], []).append(occ)
+            unique_urls = list(url_groups.keys())
+            random.shuffle(unique_urls)
+            clips = []
+            for url in unique_urls[:n_voices * 2]:
+                if len(clips) >= n_voices: break
+                occ     = random.choice(url_groups[url])
+                fmt_ns  = re.sub(r"[^a-z0-9]", "", (_active_format_id or "all")[:8])
+                fmt_dir = CACHE_DIR / fmt_ns; fmt_dir.mkdir(exist_ok=True)
+                ck      = re.sub(r"[^a-z0-9]", "_", matched)
+                cp      = fmt_dir / f"{ck}_can{len(clips)}_e{echo_level}.mp3"
+                a       = _try_extract(occ, cp, variant=0, echo_level=echo_level)
+                if a: clips.append(a)
+            if not clips:
+                self._send_error(404, "Geen stemmen gevonden"); return
+            # Canon: stemmen tegelijk (koor) — mix op elkaar gelegd
+            combined = _ffmpeg_mix(clips) if len(clips) > 1 else clips[0]
+            if not combined:
+                self._send_error(500, "Canon mix mislukt"); return
+            self.send_response(200)
+            self.send_header("Content-Type",   "audio/mpeg")
+            self.send_header("Content-Length", str(len(combined)))
+            self.send_header("X-Canon-Voices", str(len(clips)))
+            self.send_header("X-Word-Matched", matched)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Expose-Headers", "X-Canon-Voices, X-Word-Matched")
+            self.end_headers()
+            self.wfile.write(combined)
+
+        else:
+            self._send_error(404, "Niet gevonden")
+
+    def do_POST(self):
+        from urllib.parse import quote as urlquote
+        parsed = urlparse(self.path)
+        path   = parsed.path
+        qs     = parse_qs(parsed.query)
+
+        if path == "/echo/audiomatch":
+            echo_raw = qs.get("echo", ["2"])[0]
+            try: echo_level = max(0, min(3, int(echo_raw)))
+            except: echo_level = 2
+
+            content_length = int(self.headers.get("Content-Length", 0))
+            if content_length > 20_000_000:
+                self._send_error(413, "Audio te groot"); return
+            audio_in = self.rfile.read(content_length) if content_length > 0 else b""
+
+            text      = unquote(qs.get("text", [""])[0]).strip()[:200]
+            req_mode  = qs.get("mode", ["audio"])[0]   # doormodus: woord/rijm/semantisch/…
+            mime_type = self.headers.get("Content-Type", "audio/webm").split(";")[0].strip()
+
+            # ── Transcriptie-modus: mic als invoermethode voor andere modi ──────
+            if req_mode != "audio" and audio_in:
+                transcript = _gemini_transcribe(audio_in, mime_type) or text
+                if not transcript:
+                    self._send_error(503, "Transcriptie mislukt"); return
+                print(f"  🎙 Transcriptie ({req_mode}): {transcript!r}", flush=True)
+
+                if req_mode == "rhyme":
+                    # Rijm-modus: zoek rijmkandidaten op getranscribeerd woord
+                    target_word = transcript.split()[0] if transcript else ""
+                    candidates  = _get_rhyme_candidates(target_word, max_candidates=15)
+                    if not candidates:
+                        self._send_error(404, f"Geen rijm gevonden voor '{target_word}'"); return
+                    cand_word, occs = random.choice(candidates)
+                    occ   = random.choice(occs)
+                    mic_dir = CACHE_DIR / "mic"; mic_dir.mkdir(exist_ok=True)
+                    audio = _try_extract(occ,
+                                         mic_dir / f"rhyme_{re.sub(r'[^a-z0-9]','_',cand_word)}.mp3",
+                                         variant=0, echo_level=echo_level)
+                    if not audio:
+                        self._send_error(404, "Rijmfragment niet beschikbaar"); return
+                    from urllib.parse import quote as urlquote
+                    self.send_response(200)
+                    self.send_header("Content-Type",    "audio/mpeg")
+                    self.send_header("Content-Length",  str(len(audio)))
+                    self.send_header("X-Rhyme-Word",    cand_word)
+                    self.send_header("X-Transcript",    urlquote(transcript))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Access-Control-Expose-Headers",
+                                     "X-Rhyme-Word, X-Transcript")
+                    self.end_headers()
+                    self.wfile.write(audio); return
+
+                elif req_mode in ("word",):
+                    # Woord-modus: exacte woordzoekopdracht
+                    matched, _ = _resolve_query(transcript.split()[0] if transcript else "")
+                    audio_w, freq, ctx_b, ctx_a = _extract_and_echo(matched, variant=0, echo_level=echo_level)
+                    if not audio_w:
+                        self._send_error(404, f"'{transcript}' niet gevonden"); return
+                    from urllib.parse import quote as urlquote
+                    self.send_response(200)
+                    self.send_header("Content-Type",    "audio/mpeg")
+                    self.send_header("Content-Length",  str(len(audio_w)))
+                    self.send_header("X-Word-Matched",  matched)
+                    self.send_header("X-Transcript",    urlquote(transcript))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Access-Control-Expose-Headers",
+                                     "X-Word-Matched, X-Transcript")
+                    self.end_headers()
+                    self.wfile.write(audio_w); return
+
+                else:
+                    # Alle andere modi: semantisch zoeken op transcript
+                    results_t = _similarity_search(transcript, limit=10)
+                    if not results_t:
+                        self._send_error(404, "Geen match gevonden"); return
+                    audio_s, top_s = None, None
+                    for cand in results_t[:6]:
+                        audio_s = _try_extract_segment(
+                            cand["audio_url"], cand["start_ms"],
+                            cand["end_ms"], echo_level=echo_level
+                        )
+                        if audio_s: top_s = cand; break
+                    if not audio_s:
+                        self._send_error(404, "Fragment niet beschikbaar"); return
+                    from urllib.parse import quote as urlquote
+                    self.send_response(200)
+                    self.send_header("Content-Type",    "audio/mpeg")
+                    self.send_header("Content-Length",  str(len(audio_s)))
+                    self.send_header("X-Similarity",    f"{top_s['similarity']:.2f}")
+                    self.send_header("X-Fragment-Text", urlquote(top_s.get("text","")[:80]))
+                    self.send_header("X-Transcript",    urlquote(transcript))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Access-Control-Expose-Headers",
+                                     "X-Similarity, X-Fragment-Text, X-Transcript")
+                    self.end_headers()
+                    self.wfile.write(audio_s); return
+
+            # ── Standaard audio-embedding modus ─────────────────────────────────
+            # Probeer Gemini multimodale embedding
+            emb = None
+            if audio_in:
+                emb = _gemini_embed(audio_bytes=audio_in, text=text)
+                if emb:
+                    print(f"  🎙 Gemini audio-embedding OK (dim={len(emb)})", flush=True)
+
+            if emb:
+                results = _gemini_similarity_search(emb, limit=20)
+            elif text:
+                # Fallback: tekst-only semantisch zoeken
+                results = _similarity_search(text, limit=10)
+            else:
+                self._send_error(400, "Geen bruikbare audio of tekst ontvangen"); return
+
+            if not results:
+                self._send_error(404, "Geen echo gevonden"); return
+
+            audio, top = None, None
+            for candidate in results[:8]:
+                audio = _try_extract_segment(
+                    candidate["audio_url"], candidate["start_ms"],
+                    candidate["end_ms"], echo_level=echo_level
+                )
+                if audio: top = candidate; break
+
+            if not audio:
+                self._send_error(404, "Fragment niet beschikbaar"); return
+
+            self.send_response(200)
+            self.send_header("Content-Type",    "audio/mpeg")
+            self.send_header("Content-Length",  str(len(audio)))
+            self.send_header("X-Similarity",    f"{top['similarity']:.2f}")
+            self.send_header("X-Fragment-Text", urlquote(top.get("text","")[:80]))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Expose-Headers",
+                             "X-Similarity, X-Fragment-Text")
+            self.end_headers()
+            self.wfile.write(audio)
+
         else:
             self._send_error(404, "Niet gevonden")
 
@@ -1916,6 +3211,13 @@ def main():
     print(f"  {url}")
     print(f"  {db_path}")
     print(f"  Ctrl+C om te stoppen\n")
+
+    try:
+        from stemmy_cli.audio.parallel_extractor import ParallelExtractor  # noqa: F401
+    except ImportError as e:
+        print(f"  ⚠️  Audio-extractie ontbreekt ({e}).", flush=True)
+        print("     Zonder dit geven /echo/api en /echo/gap 404. Installeer o.a. requests:\n"
+              "     pip install requests\n", flush=True)
 
     if args.browser:
         threading.Timer(1.2, webbrowser.open, args=(url,)).start()

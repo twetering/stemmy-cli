@@ -349,7 +349,7 @@ def rss_to_compilation(
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmp = Path(tmpdir)
                 # Extract (standalone ffmpeg, files stay in tmp until concat)
-                extractor = ParallelExtractor(max_workers=4, output_dir=tmp)
+                extractor = ParallelExtractor(max_workers=20, output_dir=tmp)  # globale executor
                 successes, failures = extractor.extract_segments(segments_payload)
                 if not successes:
                     err_msgs = [f"{r.segment_id}: {r.error}" for r in failures[:3]]

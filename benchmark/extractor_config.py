@@ -18,7 +18,7 @@ class ExtractorConfig:
     # Concurrency
     # -------------------------------------------------------------------------
     # Aantal parallelle download/extract threads (1–16)
-    max_workers: int = 10
+    max_workers: int = 12
 
     # Executor strategie: "thread" = ThreadPoolExecutor (standaard, laag overhead)
     # "process" = ProcessPoolExecutor (nuttig bij CPU-gebonden FFmpeg, hogere overhead)
@@ -51,7 +51,7 @@ class ExtractorConfig:
     max_group_span: float = 30.0
 
     # Max aantal segmenten per downloadgroep
-    max_group_size: int = 8
+    max_group_size: int = 10
 
     # Sorteer segmenten op start_time binnen een URL vóór groepering
     sort_before_grouping: bool = True

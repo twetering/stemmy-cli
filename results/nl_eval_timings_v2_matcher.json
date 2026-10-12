@@ -1,0 +1,21 @@
+{
+  "benchmark_id": "2f47ce23-8a3e-4414-86ef-15155f8f0be2",
+  "item_id": "dad3ee32-f913-42a4-b3fc-f7c1e792155d",
+  "reference_chars": 99871,
+  "hypothesis_chars": 93082,
+  "reference_fragments": 534,
+  "hypothesis_utterances": 3108,
+  "utterance_pairs": 84,
+  "wer": 0.15747555750851366,
+  "cer": 0.12613988033835363,
+  "reference_t0": 0.294,
+  "reference_t1": 998.885,
+  "hypothesis_t0": 0.0,
+  "hypothesis_t1": 5782.44,
+  "timing_start_abs_err_sec": 0.294,
+  "timing_end_abs_err_sec": 4783.554999999999,
+  "timing_span_err_sec": 4783.848999999999,
+  "timing_pair_start_abs_err_sec": 2.545345238095238,
+  "timing_pair_end_abs_err_sec": 2.602202380952381,
+  "word_pairs": 754
+}

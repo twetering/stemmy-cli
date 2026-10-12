@@ -24,6 +24,7 @@ wheels/
 .venv/
 venv/
 ENV/
+.venv312/
 
 # Environment
 .env
@@ -59,3 +60,9 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# video
+videos/
+
+# Supercut: woordindex en broncache (groot, lokaal te herbouwen)
+supercut/cache/

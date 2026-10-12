@@ -1,7 +1,4 @@
-# HYPOTHESE: Globale ThreadPoolExecutor over ALLE groepen van ALLE URLs tegelijk,
-# gecombineerd met VBR-veilig byte-range downloaden (ruime buffer) en FFmpeg
-# timestamp-based seeking in tempfile. Elimineert serieel-per-URL bottleneck.
-# 20 workers voor cross-episode fixture (43 URLs × 1 segment = maximaal parallellisme).
+# HYPOTHESE: Elimineer libmp3lame re-encoding door `-c:a copy` als eerste poging, met libmp3lame als fallback bij seek-imprecisie. Bewijs dat stream-copy voldoende nauwkeurig is voor MP3-bronnen. Behoudt bewezen baseline-parameters (BUFFER_BEFORE=8s voor VBR-veiligheid, 20 workers, groepen van 8).
 
 import logging
 import os
@@ -20,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 def _find_binary(name: str) -> str:
-    """Zoek een binary in PATH + veelgebruikte extra locaties (homebrew, conda)."""
     import shutil
     found = shutil.which(name)
     if found:
@@ -35,18 +31,17 @@ def _find_binary(name: str) -> str:
 _FFMPEG  = _find_binary("ffmpeg")
 _FFPROBE = _find_binary("ffprobe")
 
-
 # ---------------------------------------------------------------------------
 # Configuratie
 # ---------------------------------------------------------------------------
-_MAX_WORKERS     = 20    # parallelle groep-verwerkers (I/O-bound: meer = sneller)
-_MAX_TIME_GAP    = 10.0  # max gap in seconden om segmenten te groeperen
-_MAX_GROUP_SPAN  = 30.0  # max tijdspanne van een groep
-_MAX_GROUP_SIZE  = 8     # max segmenten per groep
-_BUFFER_BEFORE   = 8.0   # preroll in seconden (ruim voor VBR-precisie en VBR-timing)
-_BUFFER_AFTER    = 2.0   # post-roll in seconden
-_HTTP_TIMEOUT    = 45.0  # seconden voor HTTP download
-_HTTP_CHUNK_SIZE = 65536 # bytes per download-chunk
+_MAX_WORKERS     = 20    # bewezen baseline: voldoende parallellisme voor S3
+_MAX_TIME_GAP    = 10.0  # bewezen baseline: groepen per URL
+_MAX_GROUP_SPAN  = 30.0  # bewezen baseline
+_MAX_GROUP_SIZE  = 8     # bewezen baseline: minder FFmpeg-processes, minder overhead
+_BUFFER_BEFORE   = 8.0   # KRITIEK: VBR-audio heeft ruime preroll nodig (Megaphone CDN!)
+_BUFFER_AFTER    = 1.0   # post-roll
+_HTTP_TIMEOUT    = 30.0
+_HTTP_CHUNK_SIZE = 131072
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +86,7 @@ def extract_segments(
 
     total = sum(len(v) for v in segments_by_url.values())
 
-    # Bouw ALLE groepen van ALLE URLs als platte lijst (kernverbetering: globale executor)
+    # Bouw ALLE groepen van ALLE URLs als platte lijst
     all_groups: List[Tuple[List[Dict], str]] = []
     for url, url_segs in segments_by_url.items():
         sorted_segs = sorted(url_segs, key=lambda s: s["start_time"])
@@ -100,7 +95,6 @@ def extract_segments(
 
     logger.info(f"Processing {total} segments → {len(all_groups)} groups from {len(segments_by_url)} URLs")
 
-    # GLOBALE executor: alle groepen van alle URLs tegelijk
     processed = 0
     lock = threading.Lock()
     all_success: List[ExtractionResult] = []
@@ -141,7 +135,7 @@ def extract_segments(
 # ---------------------------------------------------------------------------
 
 def _make_groups(segs: List[Dict]) -> List[List[Dict]]:
-    """Greedy groepering op basis van tijdsgap, tijdsspanne en groepsgrootte."""
+    """Greedy groepering: kleine groepen voor maximaal parallellisme."""
     if not segs:
         return []
     groups: List[List[Dict]] = []
@@ -163,7 +157,7 @@ def _process_group(
     url: str,
     output_dir: Path,
 ) -> List[ExtractionResult]:
-    """Download een chunk voor de groep en extraheer elk segment."""
+    """Download chunk voor de groep en extraheer elk segment."""
     if not group:
         return []
 
@@ -172,7 +166,6 @@ def _process_group(
     chunk_start = max(0.0, group_start - _BUFFER_BEFORE)
     chunk_end   = group_end + _BUFFER_AFTER
 
-    # Probeer byte-range download; val terug op volledige download
     chunk_data, actual_chunk_start = _download_chunk(url, chunk_start, chunk_end)
     if chunk_data is None:
         return [
@@ -180,7 +173,6 @@ def _process_group(
             for seg in group
         ]
 
-    # Schrijf chunk naar tempfile
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
         tmp_path = f.name
         f.write(chunk_data)
@@ -188,8 +180,6 @@ def _process_group(
     try:
         results = []
         for seg in group:
-            # Tijdpositie relatief aan het begin van de chunk
-            # Gebruik BUFFER_BEFORE als anker (niet byte-berekende offset) voor VBR-robuustheid
             chunk_time_offset = seg["start_time"] - actual_chunk_start
             seg_duration = seg["end_time"] - seg["start_time"]
             res = _extract_segment(seg["id"], chunk_time_offset, seg_duration, tmp_path, output_dir)
@@ -208,17 +198,14 @@ def _download_chunk(
     chunk_end: float,
 ) -> Tuple[Optional[bytes], float]:
     """
-    Download audio-chunk via HTTP Range request.
-    Retourneert (bytes, actual_chunk_start_time).
-    Bij mislukking of geen Range-support: volledige download.
+    Download audio-chunk. Probeer byte-range; fallback naar volledige download.
     """
     session = requests.Session()
     adapter = requests.adapters.HTTPAdapter(max_retries=2)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
 
-    # Schat byte-posities via HEAD request voor bitrate
-    bitrate = 128000  # conservatieve default (128kbps)
+    bitrate = 128000  # default 128kbps
     content_length = None
     accept_ranges = False
 
@@ -230,13 +217,6 @@ def _download_chunk(
                 content_length = int(cl)
             ar = head.headers.get("Accept-Ranges", "").lower()
             accept_ranges = "bytes" in ar
-
-            # Schat bitrate uit Content-Length en gebruik ffprobe als backup
-            if content_length and content_length > 1000:
-                # Probeer bitrate te schatten (conservatief: neem 192kbps als upper bound)
-                # Gebruik Content-Length / (bestandsduur als bekende) — maar we weten duur niet
-                # → gebruik conservatief 128kbps
-                pass
     except Exception:
         pass
 
@@ -254,18 +234,17 @@ def _download_chunk(
             )
             if resp.status_code in (200, 206):
                 data = b"".join(resp.iter_content(chunk_size=_HTTP_CHUNK_SIZE))
-                # actual_chunk_start is de geschatte tijd op basis van byte offset
                 actual_start = byte_start / bytes_per_sec
                 return data, actual_start
         except Exception as e:
             logger.debug(f"Range download failed: {e}")
 
-    # Fallback: volledig bestand downloaden
+    # Fallback: volledig bestand
     try:
         resp = session.get(url, timeout=_HTTP_TIMEOUT, stream=True)
         if resp.status_code in (200, 206):
             data = b"".join(resp.iter_content(chunk_size=_HTTP_CHUNK_SIZE))
-            return data, 0.0  # Volledig bestand begint op t=0
+            return data, 0.0
     except Exception as e:
         logger.debug(f"Full download failed: {e}")
 
@@ -280,22 +259,49 @@ def _extract_segment(
     output_dir: Path,
 ) -> ExtractionResult:
     """
-    Extraheer één segment uit de lokale tempfile via FFmpeg met twee-pass seek.
-    Pass 1 (-ss vóór -i): snelle positie in tempfile
-    Pass 2 (-ss na -i): nauwkeurige frame-gebaseerde seek
-    Output = exact segment_duration.
+    Extraheer één segment uit lokale tempfile via FFmpeg.
+    Probeer eerst -c:a copy (snelst); fallback naar libmp3lame bij failure.
+    Twee-pass seek voor nauwkeurigheid.
     """
     if duration <= 0:
         return ExtractionResult(seg_id, "", 0.0, False, "Zero/negative duration")
 
-    # Pre-seek (snel): zet af op een positie iets vóór de doelpositie
-    pre_seek = max(0.0, chunk_time_offset - 1.0)
+    pre_seek  = max(0.0, chunk_time_offset - 1.0)
     fine_seek = chunk_time_offset - pre_seek
 
     safe    = "".join(c if c.isalnum() else "_" for c in seg_id[:50])
     outpath = str(output_dir / f"seg_{safe}.mp3")
 
-    cmd = [
+    # Poging 1: stream copy (geen re-encode, maximale snelheid)
+    cmd_copy = [
+        _FFMPEG, "-y",
+        "-ss", f"{pre_seek:.3f}",
+        "-i", tmp_path,
+        "-ss", f"{fine_seek:.3f}",
+        "-t",  f"{duration:.3f}",
+        "-c:a", "copy",
+        "-avoid_negative_ts", "make_zero",
+        outpath,
+    ]
+
+    try:
+        result = subprocess.run(cmd_copy, capture_output=True, timeout=20, check=False)
+        if (
+            result.returncode == 0
+            and Path(outpath).exists()
+            and Path(outpath).stat().st_size > 0
+        ):
+            actual = _get_duration(outpath)
+            # Valideer: als duration error te groot, probeer re-encode
+            if abs(actual - duration) <= 1.0:
+                return ExtractionResult(seg_id, outpath, actual, True)
+    except subprocess.TimeoutExpired:
+        pass
+    except Exception:
+        pass
+
+    # Poging 2: libmp3lame re-encode (nauwkeuriger seek)
+    cmd_encode = [
         _FFMPEG, "-y",
         "-ss", f"{pre_seek:.3f}",
         "-i", tmp_path,
@@ -307,7 +313,7 @@ def _extract_segment(
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=30, check=False)
+        result = subprocess.run(cmd_encode, capture_output=True, timeout=30, check=False)
         if (
             result.returncode == 0
             and Path(outpath).exists()

@@ -81,17 +81,22 @@ def get_words_from_transcript(transcript: Dict, item_id: str) -> Optional[List[D
     return combined if combined else None
 
 
-def migrate_words(dry_run: bool = True, limit: Optional[int] = None):
+def migrate_words(
+    dry_run: bool = True,
+    limit: Optional[int] = None,
+    db_path: Optional[Path] = None,
+):
     """
     Migrate words data from transcript_data to fragments.
     
     Args:
         dry_run: If True, don't commit changes
         limit: Limit number of items to process (for testing)
+        db_path: SQLite file (default: STEMMY_DB_PATH / get_database_path())
     """
     from stemmy_cli.config import get_database_path
 
-    db_path = get_database_path()
+    db_path = Path(db_path) if db_path else get_database_path()
     if not db_path.exists():
         print(f"Database not found: {db_path}")
         return 0
@@ -180,12 +185,15 @@ def migrate_words(dry_run: bool = True, limit: Optional[int] = None):
 if __name__ == "__main__":
     dry_run = "--execute" not in sys.argv
     limit = None
-    
+    db_arg: Optional[Path] = None
+
     for arg in sys.argv[1:]:
         if arg.startswith("--limit="):
             limit = int(arg.split("=")[1])
-    
+        elif arg.startswith("--db="):
+            db_arg = Path(arg.split("=", 1)[1]).expanduser()
+
     if dry_run:
         print("DRY RUN MODE - use --execute to apply changes\n")
-    
-    migrate_words(dry_run=dry_run, limit=limit)
+
+    migrate_words(dry_run=dry_run, limit=limit, db_path=db_arg)

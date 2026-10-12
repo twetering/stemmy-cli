@@ -1,0 +1,1255 @@
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HET DUET 3.0</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Manrope:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#06111b;
+  --bg2:#0c1724;
+  --paper:rgba(244,239,230,.92);
+  --muted:rgba(220,220,220,.46);
+  --narrator:#8fd3ff;
+  --narrator-glow:rgba(100,189,255,.35);
+  --archive:#f4c87d;
+  --archive-glow:rgba(244,200,125,.32);
+  --line:rgba(255,255,255,.18);
+  --panel:rgba(10,17,26,.68);
+  --panel-border:rgba(255,255,255,.10);
+}
+html,body{
+  min-height:100%;
+  background:
+    radial-gradient(circle at 20% 18%, rgba(78,123,171,.18), transparent 34%),
+    radial-gradient(circle at 78% 20%, rgba(205,146,65,.16), transparent 30%),
+    linear-gradient(180deg,var(--bg),var(--bg2) 58%, #050b11);
+  color:var(--paper);
+  font-family:'Manrope',sans-serif;
+}
+body{
+  padding:24px 28px 34px;
+  display:flex;
+  flex-direction:column;
+  gap:20px;
+}
+header{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:16px;
+}
+.brand h1{
+  font-family:'Cormorant Garamond',serif;
+  font-size:clamp(2.5rem,6vw,4.8rem);
+  font-weight:600;
+  letter-spacing:.12em;
+}
+.brand p{
+  margin-top:4px;
+  font-size:.82rem;
+  letter-spacing:.2em;
+  text-transform:uppercase;
+  color:var(--muted);
+}
+.modebar{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:flex-end;
+}
+.pill{
+  border:1px solid var(--panel-border);
+  background:rgba(255,255,255,.04);
+  color:var(--paper);
+  border-radius:999px;
+  padding:9px 14px;
+  font-size:.76rem;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+}
+.shell{
+  display:grid;
+  grid-template-columns:minmax(280px,1fr) minmax(360px,2.3fr) minmax(260px,.9fr);
+  gap:18px;
+  min-height:76vh;
+}
+.panel{
+  background:var(--panel);
+  border:1px solid var(--panel-border);
+  border-radius:24px;
+  backdrop-filter:blur(16px);
+  box-shadow:0 18px 60px rgba(0,0,0,.22);
+}
+.controls{
+  padding:18px;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.controls h2,.studio h2{
+  font-size:.88rem;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  color:var(--muted);
+}
+.stack{display:flex;flex-direction:column;gap:8px}
+.row{display:flex;gap:8px;align-items:center}
+input[type=text], select{
+  width:100%;
+  background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:16px;
+  color:var(--paper);
+  padding:12px 14px;
+  font-size:.94rem;
+  outline:none;
+}
+button{
+  border:none;
+  border-radius:18px;
+  padding:12px 16px;
+  color:var(--paper);
+  background:rgba(255,255,255,.08);
+  font-weight:600;
+  cursor:pointer;
+  transition:transform .15s ease, background .15s ease, box-shadow .15s ease;
+}
+button:hover{transform:translateY(-1px);background:rgba(255,255,255,.12)}
+.primary{background:linear-gradient(135deg, rgba(143,211,255,.28), rgba(244,200,125,.18));box-shadow:0 10px 30px rgba(0,0,0,.18)}
+.small{padding:10px 12px;font-size:.85rem}
+.segmented{display:flex;gap:8px;flex-wrap:wrap}
+.segmented button.active{
+  background:rgba(255,255,255,.18);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);
+}
+.stage{
+  position:relative;
+  padding:28px 24px 24px;
+  overflow:hidden;
+}
+.theater{
+  position:relative;
+  min-height:66vh;
+  display:flex;
+  flex-direction:column;
+  justify-content:space-between;
+}
+.speakers{
+  display:grid;
+  grid-template-columns:1fr auto 1fr;
+  align-items:center;
+  gap:16px;
+  min-height:56vh;
+}
+.speaker-wrap{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:16px;
+}
+.speaker-copy{
+  min-height:132px;
+  max-width:340px;
+  text-align:center;
+  line-height:1.55;
+  font-size:clamp(1rem,1.5vw,1.18rem);
+}
+.speaker-copy.narrator{color:var(--narrator)}
+.speaker-copy.archive{color:var(--archive)}
+.speaker{
+  width:clamp(190px,24vw,280px);
+  aspect-ratio:1/1;
+  border-radius:50%;
+  position:relative;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  overflow:visible;
+}
+.speaker.narrator{
+  background:radial-gradient(circle at 45% 38%, rgba(12,72,104,.88), rgba(2,16,28,.96));
+  border:1px solid rgba(143,211,255,.24);
+  box-shadow:0 0 80px rgba(86,178,242,.12), inset 0 0 80px rgba(0,0,0,.48);
+}
+.speaker.archive{
+  background:radial-gradient(circle at 55% 38%, rgba(100,58,7,.82), rgba(21,11,0,.96));
+  border:1px solid rgba(244,200,125,.22);
+  box-shadow:0 0 80px rgba(244,200,125,.10), inset 0 0 80px rgba(0,0,0,.48);
+}
+.speaker.active.narrator{box-shadow:0 0 130px var(--narrator-glow), inset 0 0 80px rgba(0,0,0,.34)}
+.speaker.active.archive{box-shadow:0 0 130px var(--archive-glow), inset 0 0 80px rgba(0,0,0,.34)}
+/* Dynamische ensemble-orbs: kleur via inline CSS-variabele */
+.speaker.ensemble-voice{
+  background:radial-gradient(circle at 45% 38%, rgba(20,20,40,.88), rgba(4,8,16,.96));
+  border:1px solid rgba(var(--orb-rgb,143,211,255),.28);
+  box-shadow:0 0 60px rgba(var(--orb-rgb,143,211,255),.08), inset 0 0 80px rgba(0,0,0,.48);
+}
+.speaker.ensemble-voice.active{
+  box-shadow:0 0 120px rgba(var(--orb-rgb,143,211,255),.38), inset 0 0 80px rgba(0,0,0,.34);
+}
+/* Arc voortgangsbalk */
+#arc-bar{
+  display:flex;
+  gap:4px;
+  flex-wrap:wrap;
+  padding:4px 0;
+  min-height:16px;
+}
+#arc-bar span{
+  width:14px;height:14px;
+  border-radius:3px;
+  border:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.06);
+  font-size:.6rem;
+  display:flex;align-items:center;justify-content:center;
+  color:rgba(255,255,255,.35);
+  transition:background .3s;
+}
+#arc-bar span.done{background:rgba(255,255,255,.22);color:rgba(255,255,255,.7)}
+#arc-bar span.active-beat{background:rgba(143,211,255,.38);color:#fff}
+/* Real-time transcript */
+#transcript-panel{
+  max-height:130px;
+  overflow-y:auto;
+  font-size:.78rem;
+  line-height:1.5;
+  padding:8px 0;
+  border-top:1px solid var(--line);
+  margin-top:8px;
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+#transcript-panel .tr-line{
+  padding:2px 0;
+  opacity:.82;
+}
+#transcript-panel .tr-line.narrator{color:var(--narrator)}
+#transcript-panel .tr-line.archive{color:var(--archive)}
+/* Motief-cloud */
+#motif-cloud{
+  display:flex;flex-wrap:wrap;gap:5px;
+  padding:6px 0;
+}
+#motif-cloud span{
+  font-size:.7rem;
+  padding:3px 8px;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.05);
+  color:var(--muted);
+  transition:background .4s, color .4s;
+}
+#motif-cloud span.lit{background:rgba(143,211,255,.18);color:var(--narrator)}
+/* Beat-type badge */
+#beat-type-badge{
+  font-size:.68rem;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  opacity:.6;
+  padding:2px 6px;
+  border-radius:4px;
+  background:rgba(255,255,255,.06);
+}
+/* Thema als watermark */
+#theme-watermark{
+  position:absolute;
+  inset:0;
+  display:flex;align-items:center;justify-content:center;
+  pointer-events:none;
+  overflow:hidden;
+  z-index:0;
+}
+#theme-watermark span{
+  font-family:'Cormorant Garamond',serif;
+  font-size:clamp(2.5rem,8vw,7rem);
+  font-weight:600;
+  letter-spacing:.22em;
+  text-transform:uppercase;
+  color:rgba(255,255,255,.03);
+  text-align:center;
+  line-height:1.1;
+  word-break:break-word;
+  max-width:90%;
+}
+/* Ensemble speakers: flexibele indeling */
+.speakers.ensemble{
+  display:flex;
+  flex-wrap:wrap;
+  gap:18px;
+  justify-content:center;
+  align-items:flex-start;
+}
+.speakers.ensemble .speaker-wrap{
+  flex:0 0 auto;
+  width:clamp(130px,20vw,200px);
+}
+.speakers.ensemble .speaker{
+  width:100%;
+  aspect-ratio:1/1;
+}
+/* Beam buiten speakers-container — verberg bij ensemble */
+.speakers.ensemble ~ .beam{ display:none; }
+.beam-placeholder{ display:none; }
+/* Palette-indicator */
+#palette-badge{
+  font-size:.68rem;letter-spacing:.1em;
+  color:var(--muted);opacity:.7;
+}
+.speaker::before,.speaker::after{
+  content:"";
+  position:absolute;
+  inset:-8%;
+  border-radius:50%;
+  border:1px solid transparent;
+  opacity:0;
+}
+.speaker.active::before{opacity:.5;animation:ring 1.8s ease-out infinite}
+.speaker.active::after{opacity:.3;animation:ring 1.8s ease-out .8s infinite}
+@keyframes ring{
+  from{transform:scale(.96)}
+  to{transform:scale(1.1);opacity:0}
+}
+.speaker .label{
+  font-family:'Cormorant Garamond',serif;
+  font-size:1.35rem;
+  letter-spacing:.18em;
+  text-transform:uppercase;
+}
+.speaker .sub{
+  margin-top:6px;
+  font-size:.78rem;
+  color:var(--muted);
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+.beam{
+  width:min(16vw,180px);
+  height:2px;
+  position:relative;
+  background:linear-gradient(90deg, rgba(143,211,255,.45), rgba(255,255,255,.18), rgba(244,200,125,.45));
+  opacity:.18;
+}
+.beam.active{opacity:.95;animation:flow 1.4s linear infinite}
+.beam.reverse{background:linear-gradient(90deg, rgba(244,200,125,.45), rgba(255,255,255,.18), rgba(143,211,255,.45))}
+@keyframes flow{from{background-position:0 0}to{background-position:160px 0}}
+.statusline{
+  display:flex;
+  justify-content:space-between;
+  gap:14px;
+  flex-wrap:wrap;
+  align-items:center;
+  color:var(--muted);
+  font-size:.8rem;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+}
+.history{
+  margin-top:18px;
+  display:grid;
+  gap:10px;
+}
+.history-item{
+  border-top:1px solid rgba(255,255,255,.08);
+  padding-top:10px;
+  font-size:.86rem;
+  color:rgba(255,255,255,.68);
+}
+.history-item strong{color:var(--paper)}
+.studio{
+  padding:18px;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.metric{
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  font-size:.86rem;
+  color:rgba(255,255,255,.72);
+  border-bottom:1px solid rgba(255,255,255,.06);
+  padding-bottom:6px;
+}
+.studio pre{
+  white-space:pre-wrap;
+  word-break:break-word;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:.72rem;
+  line-height:1.45;
+  color:rgba(255,255,255,.74);
+}
+.hidden{display:none!important}
+@media (max-width: 1100px){
+  .shell{grid-template-columns:1fr}
+  .speakers{grid-template-columns:1fr;gap:28px}
+  .beam{width:2px;height:70px;justify-self:center;background:linear-gradient(180deg, rgba(143,211,255,.45), rgba(255,255,255,.18), rgba(244,200,125,.45))}
+}
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>HET DUET</h1>
+      <p>geregisseerde audio-installatie tussen stem en archief</p>
+    </div>
+    <div class="modebar">
+      <div class="pill" id="health-pill">health: laden…</div>
+      <div class="pill" id="session-pill">geen sessie</div>
+    </div>
+  </header>
+
+  <div class="shell">
+    <section class="panel controls">
+      <h2>Regie</h2>
+      <div class="stack">
+        <label for="theme-input">Thema</label>
+        <input type="text" id="theme-input" maxlength="120" placeholder="geef een thema, gevoel of richting…" />
+      </div>
+      <div class="stack">
+        <label for="format-sel">Podcast</label>
+        <select id="format-sel"><option value="">alle podcasts</option></select>
+      </div>
+      <div class="stack">
+        <label>Speelmodus</label>
+        <div class="segmented" id="mode-group">
+          <button class="small active" data-mode="orchestrated">Orchestrated</button>
+          <button class="small" data-mode="script">Monteur</button>
+          <button class="small" data-mode="live">Experimental Live</button>
+        </div>
+      </div>
+      <div class="stack">
+        <label>Structuur</label>
+        <div class="segmented" id="conversation-group">
+          <button class="small active" data-conversation="duet">Duet</button>
+          <button class="small" data-conversation="interview">Interview</button>
+        </div>
+      </div>
+      <div class="stack">
+        <label>UI</label>
+        <div class="segmented" id="ui-group">
+          <button class="small active" data-ui="performance">Performance</button>
+          <button class="small" data-ui="studio">Studio</button>
+        </div>
+      </div>
+      <div class="stack">
+        <label>Planner</label>
+        <div class="segmented" id="planner-group">
+          <button class="small active" data-planner="claude">Claude</button>
+          <button class="small" data-planner="gemini">Gemini</button>
+        </div>
+      </div>
+      <div class="stack">
+        <label>TTS</label>
+        <div class="segmented" id="tts-group">
+          <button class="small active" data-tts="elevenlabs">ElevenLabs Theo</button>
+          <button class="small" data-tts="gemini">Gemini TTS</button>
+          <button class="small" data-tts="browser">Browser</button>
+          <button class="small" data-tts="gemini-live">Gemini Live</button>
+        </div>
+      </div>
+      <div class="stack" id="voice-row">
+        <label for="voice-sel">ElevenLabs stem</label>
+        <select id="voice-sel">
+          <option value="">Theo (default)</option>
+        </select>
+      </div>
+      <div class="stack" id="s2s-row" style="display:none">
+        <label>Speech-to-Speech</label>
+        <div class="segmented" id="s2s-group">
+          <button class="small active" data-s2s="off">Uit</button>
+          <button class="small" data-s2s="on">Aan — archief in stemklank</button>
+        </div>
+        <div style="font-size:.72rem;color:#888;margin-top:2px">Archief-fragmenten worden via ElevenLabs omgezet naar de klank van de geselecteerde stem. Langzamer maar immersief.</div>
+      </div>
+      <div class="stack">
+        <label>Preset</label>
+        <div class="segmented" id="preset-group">
+          <button class="small" data-preset="droog">Droog</button>
+          <button class="small active" data-preset="radio">Radio</button>
+          <button class="small" data-preset="filmisch">Filmisch</button>
+        </div>
+      </div>
+      <div class="stack">
+        <label>Stemmen</label>
+        <div class="segmented" id="voices-group">
+          <button class="small active" data-voices="1">1</button>
+          <button class="small" data-voices="2">2</button>
+          <button class="small" data-voices="3">3</button>
+          <button class="small" data-voices="4">4</button>
+        </div>
+      </div>
+      <div class="stack">
+        <label>Stijl</label>
+        <div class="segmented" id="style-group">
+          <button class="small active" data-style="vrij">Vrij</button>
+          <button class="small" data-style="kakofonie">Kakofonie</button>
+          <button class="small" data-style="verhoor">Verhoor</button>
+          <button class="small" data-style="requiem">Requiem</button>
+        </div>
+      </div>
+      <div class="stack" id="voice-assign-section" style="display:none">
+        <label>Stemkoppelingen</label>
+        <div id="voice-assign-rows"></div>
+      </div>
+      <div class="row">
+        <button class="primary" id="start-btn">Start sessie</button>
+        <button id="stop-btn">Stop</button>
+      </div>
+      <div class="stack">
+        <label for="inject-input">Interruptie</label>
+        <div class="row">
+          <input type="text" id="inject-input" maxlength="160" placeholder="meer spanning, ga intiemer, zoek iets lichters…" />
+          <button id="inject-btn">Stuur</button>
+        </div>
+        <div class="row">
+          <button id="mic-btn">Microfoon</button>
+          <button id="next-btn">Volgende beat</button>
+          <button id="auto-btn" class="active">Auto</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel stage">
+      <div class="theater">
+        <div id="theme-watermark"><span id="theme-watermark-text"></span></div>
+        <div class="speakers" id="speakers-container">
+          <!-- Dynamisch gevuld door renderEnsemble() -->
+          <div class="speaker-wrap">
+            <div class="speaker-copy narrator" id="narrator-text"></div>
+            <div class="speaker narrator" id="speaker-narrator">
+              <div class="label" id="narrator-label">—</div>
+              <div class="sub">stem</div>
+            </div>
+          </div>
+          <div class="beam-placeholder"></div>
+          <div class="speaker-wrap">
+            <div class="speaker-copy archive" id="archive-text"></div>
+            <div class="speaker archive" id="speaker-archive">
+              <div class="label">Archief</div>
+              <div class="sub">fragmenten</div>
+            </div>
+          </div>
+        </div>
+        <!-- Beam buiten speakers-container zodat renderEnsemble() het niet vernietigt -->
+        <div class="beam" id="beam"></div>
+        <div id="arc-bar" title="Arc voortgang"></div>
+        <div id="transcript-panel"></div>
+        <div id="motif-cloud"></div>
+        <div class="statusline">
+          <span id="status-bar">klaar</span>
+          <span id="beat-type-badge">—</span>
+          <span id="palette-badge">palette: —</span>
+          <span id="beat-bar">beat 0</span>
+          <span id="mode-bar">orchestrated / radio</span>
+        </div>
+        <div class="history" id="history"></div>
+      </div>
+    </section>
+
+    <aside class="panel studio hidden" id="studio-panel">
+      <h2>Studio</h2>
+      <div class="metric"><span>Provider health</span><strong id="studio-health">laden…</strong></div>
+      <div class="metric"><span>Session</span><strong id="studio-session">-</strong></div>
+      <div class="metric"><span>Search mode</span><strong id="studio-search">-</strong></div>
+      <div class="metric"><span>Transition</span><strong id="studio-transition">-</strong></div>
+      <div class="metric"><span>Degraded</span><strong id="studio-degraded">-</strong></div>
+      <div class="metric"><span>Music</span><strong id="studio-music">-</strong></div>
+      <div class="metric"><span>Prefetch</span><strong id="studio-prefetch">-</strong></div>
+      <button class="small" id="copy-logs-btn">Kopieer logs</button>
+      <pre id="studio-json"></pre>
+    </aside>
+  </div>
+
+<script>
+'use strict';
+const S = {
+  sessionId: '',
+  running: false,
+  auto: true,
+  mode: 'orchestrated',
+  conversationMode: 'duet',
+  uiMode: 'performance',
+  plannerProvider: 'claude',
+  ttsProvider: 'elevenlabs',
+  selectedVoiceId: '',
+  preset: 'radio',
+  nVoices: 1,
+  scriptStyle: 'vrij',
+  s2sMode: false,
+  ensembleVoices: [],   // [{id, name, color}, ...]
+  allVoices: [],        // alle beschikbare stemmen (voor voice-assign pickers)
+  arcBeatTypes: [],
+  arcTotal: 0,
+  arcConsumed: 0,
+  currentSrc: null,
+  audioCtx: null,
+  beatNumber: 0,
+  health: null,
+  history: [],
+  polling: false,
+  musicAudio: null,
+};
+
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function setStatus(text){ $('status-bar').textContent = text; }
+function ensureAudioCtx(){
+  if(!S.audioCtx) S.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if(S.audioCtx.state === 'suspended') S.audioCtx.resume();
+}
+const audioBufferCache = new Map();
+async function preloadAudio(audioId){
+  if(!audioId) return null;
+  if(audioBufferCache.has(audioId)) return audioBufferCache.get(audioId);
+  ensureAudioCtx();
+  const resp = await fetch('/duet/audio/' + audioId);
+  if(!resp.ok) return null;
+  const arr = await resp.arrayBuffer();
+  const decoded = await S.audioCtx.decodeAudioData(arr.slice(0));
+  audioBufferCache.set(audioId, decoded);
+  return decoded;
+}
+async function playAudio(audioId){
+  const decoded = await preloadAudio(audioId);
+  if(!decoded) return;
+  return new Promise(resolve => {
+    const src = S.audioCtx.createBufferSource();
+    src.buffer = decoded;
+    src.connect(S.audioCtx.destination);
+    src.onended = resolve;
+    src.start(0);
+    S.currentSrc = src;
+  });
+}
+function stopAudio(){
+  if(S.currentSrc){ try { S.currentSrc.stop(); } catch(_) {} S.currentSrc = null; }
+  if(window.speechSynthesis) window.speechSynthesis.cancel();
+}
+let voiceNL = null;
+function pickVoice(){
+  const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+  voiceNL = voices.find(v => v.lang && v.lang.toLowerCase().startsWith('nl')) || null;
+}
+if(window.speechSynthesis){
+  window.speechSynthesis.addEventListener('voiceschanged', pickVoice);
+  pickVoice();
+}
+function speakBrowser(text){
+  return new Promise(resolve => {
+    if(!window.speechSynthesis){ resolve(); return; }
+    const u = new SpeechSynthesisUtterance(text);
+    if(voiceNL) u.voice = voiceNL;
+    u.lang = 'nl-NL';
+    u.rate = S.mode === 'live' ? 0.96 : 0.9;
+    u.onend = resolve;
+    u.onerror = resolve;
+    window.speechSynthesis.speak(u);
+  });
+}
+async function typewrite(el, text, speed){
+  if(!el) return;
+  el.textContent = '';
+  for(const ch of text || ''){
+    el.textContent += ch;
+    await sleep(speed + Math.random()*14);
+    if(!S.running) break;
+  }
+}
+function setSpeaker(which, active){
+  const el = $('speaker-' + which);
+  if(el) el.classList.toggle('active', !!active);
+}
+function setBeam(direction){
+  const beam = $('beam');
+  if(!beam) return;
+  beam.classList.remove('active', 'reverse');
+  if(!direction) return;
+  if(direction === 'archive') beam.classList.add('reverse');
+  beam.classList.add('active');
+}
+function updateStudio(payload){
+  $('studio-panel').classList.toggle('hidden', S.uiMode !== 'studio');
+  $('studio-search').textContent = payload.search_mode || '-';
+  $('studio-transition').textContent = payload.transition_style || '-';
+  $('studio-degraded').textContent = payload.degraded_mode || '-';
+  $('studio-music').textContent = payload.music_active ? 'aan' : 'uit';
+  $('studio-prefetch').textContent = payload.prefetched_next_ready ? 'warm' : 'koud';
+  $('studio-session').textContent = S.sessionId ? S.sessionId.slice(0,8) : '-';
+  $('studio-json').textContent = JSON.stringify(payload.diagnostics || {}, null, 2);
+}
+function addHistory(payload){
+  S.history.unshift(payload);
+  S.history = S.history.slice(0,4);
+  $('history').innerHTML = S.history.map(item => `
+    <div class="history-item">
+      <strong>${item.intent || 'beat'}</strong> · ${item.search_query_used || ''}
+      <div>${(item.fragment_text || item.narrator_text || '').slice(0, 120)}</div>
+    </div>
+  `).join('');
+}
+function applySegState(groupId, attr, value){
+  document.querySelectorAll('#'+groupId+' button').forEach(btn => btn.classList.toggle('active', btn.dataset[attr] === value));
+}
+function syncVoiceRow(){
+  const isEleven = S.ttsProvider === 'elevenlabs';
+  $('voice-row').classList.toggle('hidden', !isEleven);
+  const s2sRow = $('s2s-row');
+  if(s2sRow) s2sRow.style.display = isEleven ? '' : 'none';
+}
+async function fetchHealth(){
+  const resp = await fetch('/duet/health');
+  const data = await resp.json();
+  S.health = data;
+  const ok = (data.elevenlabs.key_present && data.elevenlabs.package) || data.google.key_present;
+  $('health-pill').textContent = ok ? 'health: providers klaar' : 'health: fallback';
+  $('studio-health').textContent = ok ? 'groen' : 'geel';
+  return data;
+}
+async function init(){
+  const ready = await fetch('/duet/ready').then(r => r.json());
+  ready.formats.forEach(f => {
+    const opt = document.createElement('option');
+    opt.value = f.id;
+    opt.textContent = `${f.title} (${f.frags})`;
+    $('format-sel').appendChild(opt);
+  });
+  (ready.voices || []).forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v.voice_id;
+    const suffix = v.category ? ` · ${v.category}` : '';
+    opt.textContent = `${v.name}${suffix}`;
+    if(v.voice_id === 'PIpnKISoU0pJEeZu0rOq') opt.selected = true;
+    $('voice-sel').appendChild(opt);
+  });
+  S.selectedVoiceId = $('voice-sel').value || 'PIpnKISoU0pJEeZu0rOq';
+  S.allVoices = ready.voices || [];
+  syncVoiceRow();
+  await fetchHealth();
+}
+function renderEnsemble(voices){
+  const container = $('speakers-container');
+  if(!voices || voices.length === 0) return;
+  S.ensembleVoices = voices;
+  // Bouw dynamische orbs
+  container.innerHTML = '';
+  container.className = 'speakers' + (voices.length > 1 ? ' ensemble' : '');
+  voices.forEach((v, i) => {
+    const hex = v.color || '#8fd3ff';
+    const rgb = hexToRgb(hex);
+    const wrap = document.createElement('div');
+    wrap.className = 'speaker-wrap';
+    wrap.innerHTML = `
+      <div class="speaker-copy" id="voice-text-${v.id}" style="color:${hex};min-height:90px;max-width:260px;text-align:center;line-height:1.5;font-size:clamp(.9rem,1.3vw,1.1rem)"></div>
+      <div class="speaker ensemble-voice" id="speaker-${v.id}"
+           style="--orb-rgb:${rgb};border-color:${hex}33">
+        <div class="label" style="font-size:.78rem;letter-spacing:.1em;color:${hex}">${v.name}</div>
+      </div>`;
+    container.appendChild(wrap);
+  });
+  // Archief orb altijd als laatste
+  const archiveWrap = document.createElement('div');
+  archiveWrap.className = 'speaker-wrap';
+  archiveWrap.innerHTML = `
+    <div class="speaker-copy archive" id="archive-text" style="min-height:90px;max-width:260px;text-align:center;line-height:1.5;font-size:clamp(.9rem,1.3vw,1.1rem)"></div>
+    <div class="speaker archive" id="speaker-archive">
+      <div class="label" style="font-size:.78rem;letter-spacing:.1em">Archief</div>
+    </div>`;
+  container.appendChild(archiveWrap);
+}
+function renderVoiceAssignRows(voices, allVoices){
+  const section = $('voice-assign-section');
+  const rows = $('voice-assign-rows');
+  if(!voices || voices.length <= 1){ section.style.display = 'none'; return; }
+  section.style.display = '';
+  rows.innerHTML = '';
+  voices.forEach(v => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style = 'gap:8px;align-items:center;margin-bottom:4px';
+    const label = document.createElement('span');
+    label.textContent = v.name;
+    label.style = `color:${v.color};min-width:28px;font-size:.85rem`;
+    const sel = document.createElement('select');
+    sel.id = 'voice-assign-' + v.id;
+    sel.style = 'flex:1;font-size:.78rem;padding:6px 10px';
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = '— willekeurig —';
+    sel.appendChild(defaultOpt);
+    allVoices.forEach(av => {
+      const opt = document.createElement('option');
+      opt.value = av.voice_id;
+      opt.textContent = av.name + (av.category ? ' · ' + av.category : '');
+      if(v.elevenlabs_id === av.voice_id) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    row.appendChild(label);
+    row.appendChild(sel);
+    rows.appendChild(row);
+  });
+}
+function hexToRgb(hex){
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `${r},${g},${b}`;
+}
+function setVoiceActive(voiceId, active){
+  // Zet alle ensemble orbs inactive, activeer de juiste
+  S.ensembleVoices.forEach(v => {
+    const el = $('speaker-' + v.id);
+    if(el) el.classList.toggle('active', active && v.id === voiceId);
+  });
+  // Zoek intern id via elevenlabs_id
+  if(active && voiceId){
+    S.ensembleVoices.forEach(v => {
+      if(v.elevenlabs_id === voiceId || v.id === voiceId){
+        const el = $('speaker-' + v.id);
+        if(el) el.classList.add('active');
+      }
+    });
+  }
+}
+function updateArcBar(arcBeatTypes, arcConsumed){
+  const bar = $('arc-bar');
+  if(!arcBeatTypes || arcBeatTypes.length === 0){ bar.innerHTML = ''; return; }
+  const icons = {normal:'·', silence:'—', interrupt:'×', montage:'≡', callback:'↩', contrapuntal:'∥', micro:'°'};
+  bar.innerHTML = arcBeatTypes.map((t, i) => {
+    const cls = i < arcConsumed ? 'done' : (i === arcConsumed ? 'active-beat' : '');
+    return `<span class="${cls}" title="${t}">${icons[t] || '·'}</span>`;
+  }).join('');
+}
+function updateMotifCloud(motifs, fragmentText){
+  const cloud = $('motif-cloud');
+  if(!motifs || motifs.length === 0){ cloud.innerHTML = ''; return; }
+  cloud.innerHTML = motifs.map(m => {
+    const lit = fragmentText && fragmentText.toLowerCase().includes(m.toLowerCase());
+    return `<span class="${lit ? 'lit' : ''}">${m}</span>`;
+  }).join('');
+}
+function addTranscriptLine(text, kind, color){
+  const panel = $('transcript-panel');
+  if(!panel || !text) return;
+  const line = document.createElement('div');
+  line.className = `tr-line ${kind}`;
+  line.style.color = color || '';
+  line.textContent = text.slice(0, 120);
+  panel.appendChild(line);
+  panel.scrollTop = panel.scrollHeight;
+  // Bewaar max 30 regels
+  while(panel.children.length > 30) panel.removeChild(panel.firstChild);
+}
+async function startSession(){
+  const theme = $('theme-input').value.trim();
+  if(!theme) return $('theme-input').focus();
+  const voiceAssignments = {};
+  (S.ensembleVoices || []).forEach(v => {
+    const sel = $('voice-assign-' + v.id);
+    if(sel && sel.value) voiceAssignments[v.id] = sel.value;
+  });
+  const payload = {
+    theme,
+    format_id: $('format-sel').value || null,
+    mode: S.mode,
+    conversation_mode: S.conversationMode,
+    ui_mode: S.uiMode,
+    planner_provider: S.plannerProvider,
+    tts_provider: S.ttsProvider,
+    voice_id: S.ttsProvider === 'elevenlabs' && S.nVoices === 1 ? (S.selectedVoiceId || null) : null,
+    preset: S.preset,
+    n_voices: S.nVoices,
+    script_style: S.scriptStyle,
+    voice_assignments: voiceAssignments,
+    s2s_mode: S.s2sMode,
+  };
+  const resp = await fetch('/duet/session/start', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload),
+  });
+  const data = await resp.json();
+  if(!resp.ok){ setStatus(data.error || 'sessie mislukt'); return; }
+  S.sessionId = data.session.session_id;
+  S.running = true;
+  S.beatNumber = 0;
+  S.history = [];
+  S.arcBeatTypes = data.session.arc_beat_types || [];
+  S.arcTotal = data.session.arc_total || 0;
+  S.arcConsumed = 0;
+  // Thema als watermark
+  $('theme-watermark-text').textContent = theme.toUpperCase();
+  // Ensemble orbs
+  const voices = data.session.ensemble_voices || [];
+  if(voices.length > 0) renderEnsemble(voices);
+  renderVoiceAssignRows(voices, S.allVoices || []);
+  // Arc balk
+  updateArcBar(S.arcBeatTypes, S.arcConsumed);
+  // Palette badge
+  $('palette-badge').textContent = data.session.palette_ready ? 'palette: ✓' : 'palette: laden…';
+  $('session-pill').textContent = 'sessie ' + S.sessionId.slice(0,8);
+  $('mode-bar').textContent = `${S.mode} / ${S.scriptStyle} / ${S.preset}`;
+  setStatus(S.mode === 'live' ? 'experimental live gestart' : 'sessie gestart · arc wordt gebouwd…');
+  updateStudio({});
+  ensureAudioCtx();
+  if(S.auto) runBeat('');
+}
+async function stopSession(){
+  S.running = false;
+  stopAudio();
+  if(S.sessionId){
+    await fetch('/duet/session/interrupt', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({session_id:S.sessionId, user_input:'[STOP]'})
+    }).catch(()=>{});
+  }
+  setSpeaker('narrator', false);
+  setSpeaker('archive', false);
+  setBeam('');
+  setStatus('gestopt');
+}
+async function interruptSession(text){
+  if(!S.sessionId) return;
+  const resp = await fetch('/duet/session/interrupt', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({session_id:S.sessionId, user_input:text})
+  });
+  const data = await resp.json();
+  if(resp.ok) setStatus(data.status || 'interrupt geregistreerd');
+}
+function resolveVoiceEl(voiceId){
+  if(S.ensembleVoices.length === 0) return $('speaker-narrator');
+  // Zoek op id of elevenlabs_id
+  for(const v of S.ensembleVoices){
+    if(v.id === voiceId || v.elevenlabs_id === voiceId) return $('speaker-' + v.id);
+  }
+  // Fallback: eerste ensemble-orb (speaker-narrator bestaat niet meer)
+  return $('speaker-' + S.ensembleVoices[0].id);
+}
+function resolveVoiceTextEl(voiceId){
+  if(S.ensembleVoices.length === 0) return $('narrator-text');
+  for(const v of S.ensembleVoices){
+    if(v.id === voiceId || v.elevenlabs_id === voiceId){
+      return $('voice-text-' + v.id) || $('voice-text-' + S.ensembleVoices[0].id);
+    }
+  }
+  return $('voice-text-' + S.ensembleVoices[0].id);
+}
+async function runBeat(userInput){
+  if(!S.running || !S.sessionId || S.polling) return;
+  S.polling = true;
+  setStatus(userInput ? 'herkadert…' : 'regisseert…');
+  try{
+    const resp = await fetch('/duet/session/beat', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({session_id:S.sessionId, user_input:userInput || ''})
+    });
+    const data = await resp.json();
+    if(!resp.ok){ setStatus(data.error || 'beat mislukt'); return; }
+
+    // Preload audio
+    preloadAudio(data.narrator_audio_id);
+    preloadAudio(data.archive_audio_id);
+    preloadAudio(data.bridge_audio_id);
+    (data.montage_audio_ids || []).forEach(id => preloadAudio(id));
+
+    S.beatNumber = (data.beat_number || 0) + 1;
+    $('beat-bar').textContent = 'beat ' + S.beatNumber;
+    $('beat-type-badge').textContent = data.beat_type || 'normal';
+
+    // Arc balk bijwerken
+    if(data.diagnostics && data.diagnostics.using_arc){
+      S.arcConsumed = (S.arcConsumed || 0) + 1;
+    }
+    updateArcBar(S.arcBeatTypes, S.arcConsumed);
+
+    // Palette badge
+    if(data.diagnostics && data.diagnostics.palette_ready !== undefined){
+      $('palette-badge').textContent = data.diagnostics.palette_ready ? 'palette: ✓' : 'palette: laden…';
+    }
+
+    // Motief cloud
+    updateMotifCloud(data.semantic_expansions || [], data.fragment_text || '');
+
+    // Stem-element resolven
+    const voiceEl = resolveVoiceEl(data.voice_id);
+    const voiceTextEl = resolveVoiceTextEl(data.voice_id);
+    const voiceColor = data.voice_color || 'var(--narrator)';
+    const voiceName = data.voice_name || '';
+
+    // ── Beat-type dispatch ─────────────────────────────────────────────────
+    const beatType = data.beat_type || 'normal';
+
+    const playNarrator = async () => {
+      if(S.ensembleVoices.length > 0){
+        // Ensemble: activeer de juiste orb
+        S.ensembleVoices.forEach(v => { const el = $('speaker-'+v.id); if(el) el.classList.remove('active'); });
+        if(voiceEl) voiceEl.classList.add('active');
+      } else {
+        setSpeaker('narrator', true);
+      }
+      setBeam('narrator');
+      const tw = typewrite(voiceTextEl, data.narrator_text || '', 22);
+      if(data.narrator_audio_id){
+        await Promise.all([tw, playAudio(data.narrator_audio_id)]);
+      } else {
+        await Promise.all([tw, speakBrowser(data.narrator_text || '')]);
+      }
+      if(S.ensembleVoices.length > 0){
+        if(voiceEl) voiceEl.classList.remove('active');
+      } else {
+        setSpeaker('narrator', false);
+      }
+      addTranscriptLine((voiceName ? `[${voiceName}] ` : '') + (data.narrator_text || ''), 'narrator', voiceColor);
+    };
+
+    const playArchive = async () => {
+      if(!(data.archive_audio_id || data.fragment_text)) return;
+      setSpeaker('archive', true);
+      setBeam('archive');
+      const tw = typewrite($('archive-text'), data.fragment_text || '', 16);
+      if(data.archive_audio_id){
+        await Promise.all([tw, playAudio(data.archive_audio_id)]);
+      } else {
+        await tw;
+      }
+      setSpeaker('archive', false);
+      addTranscriptLine('[Archief] ' + (data.fragment_text || '').slice(0,100), 'archive');
+    };
+
+    if(beatType === 'silence'){
+      // Stille beat: fade + wacht
+      setBeam('');
+      $('beat-type-badge').textContent = '— stilte';
+      const ms = data.silence_ms || 2200;
+      setStatus(`stilte · ${ms}ms`);
+      await sleep(ms);
+
+    } else if(beatType === 'montage'){
+      // Montage: 2-3 fragmenten snel achter elkaar, geen narrator
+      $('beat-type-badge').textContent = '≡ montage';
+      const ids = data.montage_audio_ids || [];
+      setSpeaker('archive', true);
+      setBeam('archive');
+      typewrite($('archive-text'), data.fragment_text || '', 14);
+      for(const mid of ids){
+        await playAudio(mid);
+        await sleep(180);
+      }
+      setSpeaker('archive', false);
+      addTranscriptLine('[Montage] ' + (data.fragment_text || '').slice(0,80), 'archive');
+
+    } else if(beatType === 'contrapuntal'){
+      // Contrapunt: narrator + archief overlappen
+      $('beat-type-badge').textContent = '∥ contrapunt';
+      const archivePromise = (async () => {
+        await sleep(500);
+        await playArchive();
+      })();
+      await playNarrator();
+      await archivePromise;
+
+    } else if(beatType === 'interrupt'){
+      // Interrupt: narrator wordt afgekapt, archief speelt
+      $('beat-type-badge').textContent = '× interrupt';
+      const narP = playNarrator();
+      await narP;  // Audio al getrimd server-side
+      await sleep(80);
+      await playArchive();
+
+    } else if(beatType === 'micro'){
+      // Micro: heel kort woordfragment
+      $('beat-type-badge').textContent = '° micro';
+      await playNarrator();
+      await sleep(120);
+      await playArchive();
+
+    } else {
+      // Normal / callback
+      if(data.conversation_mode === 'interview'){
+        await playArchive();
+        if(data.bridge_audio_id){ setBeam('narrator'); await playAudio(data.bridge_audio_id); }
+        await playNarrator();
+      } else {
+        await playNarrator();
+        if(data.bridge_audio_id){ setBeam('archive'); await playAudio(data.bridge_audio_id); }
+        await playArchive();
+      }
+    }
+
+    setBeam('');
+    setSpeaker('archive', false);
+    setStatus(`${data.stage} · ${data.intent} · ${beatType}`);
+    updateStudio(data);
+    addHistory(data);
+    if(S.auto && S.running && !userInput){
+      setTimeout(() => { if(S.running) runBeat(''); }, S.mode === 'live' ? 260 : 800);
+    }
+  } finally {
+    S.polling = false;
+  }
+}
+async function startMic(){
+  if(S.mode === 'live' && S.sessionId){
+    try{
+      const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+      const recorder = new MediaRecorder(stream, {mimeType:'audio/webm'});
+      const chunks = [];
+      recorder.ondataavailable = e => chunks.push(e.data);
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        const blob = new Blob(chunks, {type:'audio/webm'});
+        const buf = await blob.arrayBuffer();
+        const resp = await fetch('/duet/live/respond', {
+          method:'POST',
+          headers:{'Content-Type':'audio/webm','X-Duet-Session':S.sessionId},
+          body: buf,
+        });
+        const data = await resp.json();
+        if(data.input_transcript){
+          $('inject-input').value = data.input_transcript;
+        }
+        if(data.audio_id){
+          setStatus('Gemini Live antwoordt…');
+          setSpeaker('narrator', true);
+          setBeam('narrator');
+          await playAudio(data.audio_id);
+          setSpeaker('narrator', false);
+          setBeam('');
+        } else if(data.input_transcript){
+          await interruptSession(data.input_transcript);
+          if(!S.auto) runBeat(data.input_transcript);
+        } else if(data.error){
+          setStatus(data.error);
+        }
+      };
+      recorder.start();
+      setStatus('live luistert…');
+      setTimeout(() => recorder.state === 'recording' && recorder.stop(), 4200);
+      return;
+    } catch(_){
+      setStatus('geen microfoon toegang');
+      return;
+    }
+  }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(SR){
+    const rec = new SR();
+    rec.lang = 'nl-NL';
+    rec.interimResults = false;
+    setStatus('luistert…');
+    rec.onresult = async e => {
+      const transcript = e.results[0][0].transcript.trim();
+      $('inject-input').value = transcript;
+      await interruptSession(transcript);
+      if(!S.auto) runBeat(transcript);
+    };
+    rec.onerror = () => setStatus('microfoon fout');
+    rec.start();
+    return;
+  }
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    const recorder = new MediaRecorder(stream, {mimeType:'audio/webm'});
+    const chunks = [];
+    recorder.ondataavailable = e => chunks.push(e.data);
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, {type:'audio/webm'});
+      const buf = await blob.arrayBuffer();
+      const resp = await fetch('/duet/audiomatch', {method:'POST', headers:{'Content-Type':'audio/webm'}, body:buf});
+      const data = await resp.json();
+      if(data.transcript){
+        $('inject-input').value = data.transcript;
+        await interruptSession(data.transcript);
+        if(!S.auto) runBeat(data.transcript);
+      }
+    };
+    recorder.start();
+    setTimeout(() => recorder.state === 'recording' && recorder.stop(), 5000);
+  } catch(_){
+    setStatus('geen microfoon toegang');
+  }
+}
+$('start-btn').onclick = startSession;
+$('stop-btn').onclick = stopSession;
+$('next-btn').onclick = () => runBeat($('inject-input').value.trim());
+$('inject-btn').onclick = async () => {
+  const text = $('inject-input').value.trim();
+  if(!text) return;
+  await interruptSession(text);
+  $('inject-input').value = '';
+  if(!S.auto) runBeat(text);
+};
+$('auto-btn').onclick = () => {
+  S.auto = !S.auto;
+  $('auto-btn').classList.toggle('active', S.auto);
+  setStatus(S.auto ? 'auto aan' : 'auto uit');
+};
+$('mic-btn').onclick = startMic;
+$('copy-logs-btn').onclick = async () => {
+  if(!S.sessionId) return;
+  const resp = await fetch('/duet/debug/events?session_id=' + encodeURIComponent(S.sessionId));
+  const data = await resp.json();
+  await navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+  setStatus('logs gekopieerd');
+};
+document.querySelectorAll('#mode-group button').forEach(btn => btn.onclick = () => {
+  S.mode = btn.dataset.mode;
+  applySegState('mode-group', 'mode', S.mode);
+  if(S.mode === 'live'){
+    S.plannerProvider = 'gemini';
+    S.ttsProvider = 'gemini-live';
+    applySegState('planner-group','planner',S.plannerProvider);
+    applySegState('tts-group','tts',S.ttsProvider);
+  }
+  // Monteur-modus: toon voice-assign sectie als er al ensemble stemmen zijn
+  if(S.mode === 'script' && S.ensembleVoices && S.ensembleVoices.length > 1){
+    renderVoiceAssignRows(S.ensembleVoices, S.allVoices || []);
+  } else if(S.mode !== 'script'){
+    const section = $('voice-assign-section');
+    if(section) section.style.display = 'none';
+  }
+});
+document.querySelectorAll('#conversation-group button').forEach(btn => btn.onclick = () => {
+  S.conversationMode = btn.dataset.conversation;
+  applySegState('conversation-group','conversation',S.conversationMode);
+});
+document.querySelectorAll('#ui-group button').forEach(btn => btn.onclick = () => {
+  S.uiMode = btn.dataset.ui;
+  applySegState('ui-group','ui',S.uiMode);
+  $('studio-panel').classList.toggle('hidden', S.uiMode !== 'studio');
+});
+document.querySelectorAll('#planner-group button').forEach(btn => btn.onclick = () => { S.plannerProvider = btn.dataset.planner; applySegState('planner-group','planner',S.plannerProvider); });
+document.querySelectorAll('#tts-group button').forEach(btn => btn.onclick = () => {
+  S.ttsProvider = btn.dataset.tts;
+  applySegState('tts-group','tts',S.ttsProvider);
+  syncVoiceRow();
+});
+document.querySelectorAll('#preset-group button').forEach(btn => btn.onclick = () => { S.preset = btn.dataset.preset; applySegState('preset-group','preset',S.preset); });
+document.querySelectorAll('#voices-group button').forEach(btn => btn.onclick = () => {
+  S.nVoices = parseInt(btn.dataset.voices) || 1;
+  applySegState('voices-group','voices', String(S.nVoices));
+  // Verberg enkelvoudige stem-selector als ensemble actief
+  const voiceRow = $('voice-row');
+  if(voiceRow) voiceRow.style.display = S.nVoices > 1 ? 'none' : '';
+});
+document.querySelectorAll('#style-group button').forEach(btn => btn.onclick = () => {
+  S.scriptStyle = btn.dataset.style;
+  applySegState('style-group','style',S.scriptStyle);
+});
+$('voice-sel').onchange = () => { S.selectedVoiceId = $('voice-sel').value || ''; };
+document.querySelectorAll('#s2s-group button').forEach(btn => btn.onclick = () => {
+  S.s2sMode = btn.dataset.s2s === 'on';
+  applySegState('s2s-group', 's2s', btn.dataset.s2s);
+});
+init();
+</script>
+</body>
+</html>

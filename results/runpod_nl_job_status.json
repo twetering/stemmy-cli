@@ -1,0 +1,16 @@
+{
+  "delayTime": 315537,
+  "executionTime": 335799,
+  "id": "775a4308-6c36-452d-a76d-b4aa48240f12-e1",
+  "output": {
+    "engine": "faster-whisper",
+    "item_id": "dad3ee32-f913-42a4-b3fc-f7c1e792155d",
+    "ok": true,
+    "s3_uri": "s3://voxpop/transcripts/runpod/dad3ee32-f913-42a4-b3fc-f7c1e792155d.json",
+    "seconds_audio": 324.44181018695235,
+    "seconds_compute": 335.696879836265,
+    "warning": null
+  },
+  "status": "COMPLETED",
+  "workerId": "dfpc8ifaacom0f"
+}

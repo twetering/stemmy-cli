@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<title>Stemmy Autoresearch Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          background: #0d1117; color: #c9d1d9; margin: 0; padding: 20px; }
+  h1 { color: #58a6ff; font-size: 1.8em; border-bottom: 1px solid #30363d; padding-bottom: 10px; }
+  h2 { color: #8b949e; font-size: 1.1em; text-transform: uppercase; letter-spacing: 1px; margin-top: 30px; }
+  .metrics-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 20px 0; }
+  .metric-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+  .metric-card .value { font-size: 2em; font-weight: bold; color: #58a6ff; }
+  .metric-card .label { color: #8b949e; font-size: 0.85em; margin-top: 4px; }
+  .charts { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin: 20px 0; }
+  .chart-box { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #21262d; color: #8b949e; text-align: left; padding: 8px 12px;
+        border-bottom: 1px solid #30363d; position: sticky; top: 0; }
+  td { padding: 7px 12px; border-bottom: 1px solid #21262d; }
+  tr:hover { background: #21262d; }
+  tr.committed { background: rgba(35, 134, 54, 0.1); }
+  tr.committed td:nth-child(3) { color: #3fb950; }
+  .footer { margin-top: 30px; color: #8b949e; font-size: 0.8em; text-align: center; }
+  canvas { max-height: 250px; }
+</style>
+</head>
+<body>
+<h1>🎵 Stemmy Autoresearch Dashboard</h1>
+<p style="color:#8b949e">Gegenereerd: 2026-03-22 17:32 |
+   Baseline: <strong>1.0000</strong> |
+   Experimenten: <strong>18</strong> |
+   Beste: <strong>11.2390</strong> (+1023.9%)</p>
+
+<div class="metrics-grid">
+  <div class="metric-card">
+    <div class="value">18</div>
+    <div class="label">Totale experimenten</div>
+  </div>
+  <div class="metric-card">
+    <div class="value" style="color:#3fb950">3</div>
+    <div class="label">Commits (verbeteringen)</div>
+  </div>
+  <div class="metric-card">
+    <div class="value">11.2390</div>
+    <div class="label">Beste score</div>
+  </div>
+  <div class="metric-card">
+    <div class="value" style="color:#3fb950">+1023.9%</div>
+    <div class="label">Verbetering vs baseline</div>
+  </div>
+</div>
+
+<div class="charts">
+  <div class="chart-box">
+    <h2>Score over Experimenten</h2>
+    <canvas id="scoreChart"></canvas>
+  </div>
+  <div class="chart-box">
+    <h2>fps vs Silence Ratio</h2>
+    <canvas id="scatterChart"></canvas>
+  </div>
+</div>
+
+<h2>Alle Experimenten (gesorteerd op score)</h2>
+<div style="overflow-x:auto">
+<table>
+<thead>
+  <tr>
+    <th>✓</th><th>Experiment</th><th>Score</th><th>fps</th>
+    <th>Success%</th><th>Silence</th><th>Clipping</th><th>Config</th>
+  </tr>
+</thead>
+<tbody>
+
+        <tr class="committed">
+            <td>✓</td>
+            <td>322-103100-e110531</td>
+            <td><strong>11.2390</strong> (+1023.9%)</td>
+            <td>15.140</td>
+            <td>100.0%</td>
+            <td>0.000</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: Globale ThreadPoolExecutor over ALLE groepen van ALLE URLs tegelijk,</td>
+        </tr>
+        <tr class="committed">
+            <td>✓</td>
+            <td>322-103021-e110531</td>
+            <td><strong>1.5090</strong> (+50.9%)</td>
+            <td>2.196</td>
+            <td>100.0%</td>
+            <td>0.000</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: Globale ThreadPoolExecutor over ALLE groepen van ALLE URLs tegelijk,</td>
+        </tr>
+        <tr class="committed">
+            <td>✓</td>
+            <td>321-214852-0bcf7c9</td>
+            <td><strong>1.0547</strong> (+5.5%)</td>
+            <td>1.266</td>
+            <td>98.3%</td>
+            <td>0.225</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">workers=10 gap=10.0s span=30.0s size=8 buf=1.0/0.5s fade=0.0s codec=libmp3lame</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>322-103140-e110531</td>
+            <td><strong>0.9493</strong> (-5.1%)</td>
+            <td>16.523</td>
+            <td>100.0%</td>
+            <td>0.000</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: Globale ThreadPoolExecutor over ALLE groepen van ALLE URLs tegelijk,</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>321-214742-0bcf7c9</td>
+            <td><strong>0.8665</strong> (-13.3%)</td>
+            <td>1.040</td>
+            <td>98.3%</td>
+            <td>0.225</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">workers=8 gap=10.0s span=30.0s size=8 buf=1.0/0.5s fade=0.0s codec=libmp3lame</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>321-215242-e110531</td>
+            <td><strong>0.8060</strong> (-19.4%)</td>
+            <td>1.131</td>
+            <td>98.3%</td>
+            <td>0.225</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">workers=12 gap=10.0s span=30.0s size=10 buf=1.0/0.5s fade=0.0s codec=libmp3lame</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>322-102118-e110531</td>
+            <td><strong>0.4662</strong> (-53.4%)</td>
+            <td>0.669</td>
+            <td>95.0%</td>
+            <td>0.075</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: FFmpeg direct op S3 HTTP URL — geen Python-download, geen byte-range-</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>322-101845-e110531</td>
+            <td><strong>0.4137</strong> (-58.6%)</td>
+            <td>0.666</td>
+            <td>90.0%</td>
+            <td>0.100</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: FFmpeg direct op S3 HTTP URL — geen Python-download, geen byte-range-</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>322-101558-e110531</td>
+            <td><strong>0.2975</strong> (-70.3%)</td>
+            <td>0.806</td>
+            <td>96.7%</td>
+            <td>0.000</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: FFmpeg direct op S3 HTTP URL — geen Python-download, geen byte-range-</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>322-102655-e110531</td>
+            <td><strong>0.0970</strong> (-90.3%)</td>
+            <td>0.635</td>
+            <td>45.0%</td>
+            <td>0.150</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: FFmpeg direct op S3 HTTP URL — geen Python-download, geen byte-range-</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>321-210047-0bcf7c9</td>
+            <td><strong>0.0000</strong> (-100.0%)</td>
+            <td>1.082</td>
+            <td>95.0%</td>
+            <td>0.488</td>
+            <td>1.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">workers=4 gap=10.0s span=30.0s size=5 buf=3.0/1.0s fade=0.015s codec=libmp3lame</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>321-211626-0bcf7c9</td>
+            <td><strong>0.0000</strong> (-100.0%)</td>
+            <td>0.000</td>
+            <td>0.0%</td>
+            <td>0.000</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">workers=4 gap=10.0s span=30.0s size=5 buf=3.0/1.0s fade=0.015s codec=libmp3lame</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>321-221435-e110531</td>
+            <td><strong>0.0000</strong> (-100.0%)</td>
+            <td>0.000</td>
+            <td>0.0%</td>
+            <td>0.000</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: Implementeer adaptieve byte-range berekening die VBR-audio correct ha</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>321-221607-e110531</td>
+            <td><strong>0.0000</strong> (-100.0%)</td>
+            <td>0.000</td>
+            <td>0.0%</td>
+            <td>0.000</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: Gebruik één globale ThreadPoolExecutor voor alle groepen van alle URL</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>321-222853-e110531</td>
+            <td><strong>0.0000</strong> (-100.0%)</td>
+            <td>0.000</td>
+            <td>0.0%</td>
+            <td>0.000</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: Gebruik directe HTTP-streaming naar FFmpeg via pipe (zonder tempfile </td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>321-223022-e110531</td>
+            <td><strong>0.0000</strong> (-100.0%)</td>
+            <td>0.000</td>
+            <td>0.0%</td>
+            <td>0.000</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: Gebruik volledige URL-download (geen byte-range) voor VBR-correctheid</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>322-101310-e110531</td>
+            <td><strong>0.0000</strong> (-100.0%)</td>
+            <td>0.000</td>
+            <td>0.0%</td>
+            <td>0.000</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: FFmpeg direct op S3 HTTP URL — geen Python-download, geen byte-range-</td>
+        </tr>
+        <tr >
+            <td></td>
+            <td>322-101419-e110531</td>
+            <td><strong>0.0000</strong> (-100.0%)</td>
+            <td>0.000</td>
+            <td>0.0%</td>
+            <td>0.000</td>
+            <td>0.000</td>
+            <td style="font-size:11px;max-width:300px;overflow:hidden">HYPOTHESE: FFmpeg direct op S3 HTTP URL — geen Python-download, geen byte-range-</td>
+        </tr>
+</tbody>
+</table>
+</div>
+
+<div class="footer">
+  Gegenereerd door stemmy benchmark/dashboard.py |
+  <a href="https://github.com/karpathy/autoresearch" style="color:#58a6ff">Gebaseerd op Karpathy autoresearch</a>
+</div>
+
+<script>
+const scores = [0.0, 0.0, 0.866548, 1.054712, 0.806021, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.297455, 0.413729, 0.466165, 0.097038, 1.509032, 11.239031, 0.949258];
+const labels = ["0047-0bcf7c9", "1626-0bcf7c9", "4742-0bcf7c9", "4852-0bcf7c9", "5242-e110531", "1435-e110531", "1607-e110531", "2853-e110531", "3022-e110531", "1310-e110531", "1419-e110531", "1558-e110531", "1845-e110531", "2118-e110531", "2655-e110531", "3021-e110531", "3100-e110531", "3140-e110531"];
+const baseline = 1.0;
+const committed = [false, false, false, true, false, false, false, false, false, false, false, false, false, false, false, true, true, false];
+const fpsVals = [1.0819, 0.0, 1.0398, 1.2655, 1.1312, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.8057, 0.6664, 0.6687, 0.635, 2.1955, 15.1404, 16.5235];
+const silenceVals = [0.4884, 0.0, 0.225, 0.225, 0.225, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.1, 0.075, 0.15, 0.0, 0.0, 0.0];
+
+// Score lijndiagram
+new Chart(document.getElementById('scoreChart'), {
+  type: 'line',
+  data: {
+    labels: labels,
+    datasets: [
+      {
+        label: 'extraction_score',
+        data: scores,
+        borderColor: '#58a6ff',
+        backgroundColor: 'rgba(88,166,255,0.1)',
+        tension: 0.3,
+        fill: true,
+        pointRadius: committed.map(c => c ? 5 : 2),
+        pointBackgroundColor: committed.map(c => c ? '#3fb950' : '#58a6ff'),
+      },
+      {
+        label: 'baseline',
+        data: Array(scores.length).fill(baseline),
+        borderColor: '#f85149',
+        borderDash: [5, 5],
+        pointRadius: 0,
+        tension: 0,
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { labels: { color: '#c9d1d9' } } },
+    scales: {
+      x: { ticks: { color: '#8b949e', maxTicksLimit: 10 }, grid: { color: '#21262d' } },
+      y: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' } }
+    }
+  }
+});
+
+// Scatter fps vs silence
+new Chart(document.getElementById('scatterChart'), {
+  type: 'scatter',
+  data: {
+    datasets: [{
+      label: 'experiments',
+      data: fpsVals.map((f, i) => ({ x: f, y: silenceVals[i] })),
+      backgroundColor: committed.map(c => c ? '#3fb950' : 'rgba(88,166,255,0.7)'),
+      pointRadius: 5,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { labels: { color: '#c9d1d9' } } },
+    scales: {
+      x: { title: { display: true, text: 'fps', color: '#8b949e' },
+             ticks: { color: '#8b949e' }, grid: { color: '#21262d' } },
+      y: { title: { display: true, text: 'silence_ratio', color: '#8b949e' },
+             ticks: { color: '#8b949e' }, grid: { color: '#21262d' } }
+    }
+  }
+});
+</script>
+</body>
+</html>
